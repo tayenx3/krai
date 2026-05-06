@@ -33,8 +33,8 @@ pub fn tokenize<'a>(path: &str, source: &'a str, no_color: bool, rodeo: &mut las
                 tokens.push(Token { kind: TokenKind::String(&source[(start + 1)..(end - 1)]), span: Span { start, end: start + ch.len_utf8() } });
             },
             '+' => tokens.push(Token { kind: TokenKind::Operator(Operator::Plus), span: Span { start, end: start + ch.len_utf8() } }),
-            '-' => if let Some(&(start, '>')) = source_chars.peek() {
-                tokens.push(Token { kind: TokenKind::Arrow, span: Span { start, end: start + ch.len_utf8() } });
+            '-' => if let Some(&(end, '>')) = source_chars.peek() {
+                tokens.push(Token { kind: TokenKind::Arrow, span: Span { start, end: end + ch.len_utf8() } });
                 source_chars.next();
             } else {
                 tokens.push(Token { kind: TokenKind::Operator(Operator::Minus), span: Span { start, end: start + ch.len_utf8() } });
@@ -43,12 +43,14 @@ pub fn tokenize<'a>(path: &str, source: &'a str, no_color: bool, rodeo: &mut las
             '/' => tokens.push(Token { kind: TokenKind::Operator(Operator::Slash), span: Span { start, end: start + ch.len_utf8() } }),
             '%' => tokens.push(Token { kind: TokenKind::Operator(Operator::Modulo), span: Span { start, end: start + ch.len_utf8() } }),
             '=' => tokens.push(Token { kind: TokenKind::Operator(Operator::Assign), span: Span { start, end: start + ch.len_utf8() } }),
+            '!' => tokens.push(Token { kind: TokenKind::Operator(Operator::Bang), span: Span { start, end: start + ch.len_utf8() } }),
             '$' => tokens.push(Token { kind: TokenKind::Dollar, span: Span { start, end: start + ch.len_utf8() } }),
             '(' => tokens.push(Token { kind: TokenKind::LParen, span: Span { start, end: start + ch.len_utf8() } }),
             ')' => tokens.push(Token { kind: TokenKind::RParen, span: Span { start, end: start + ch.len_utf8() } }),
             '{' => tokens.push(Token { kind: TokenKind::LCurly, span: Span { start, end: start + ch.len_utf8() } }),
             '}' => tokens.push(Token { kind: TokenKind::RCurly, span: Span { start, end: start + ch.len_utf8() } }),
             ';' => tokens.push(Token { kind: TokenKind::Semicolon, span: Span { start, end: start + ch.len_utf8() } }),
+            ',' => tokens.push(Token { kind: TokenKind::Comma, span: Span { start, end: start + ch.len_utf8() } }),
             ch if ch.is_ascii_digit() => {
                 let mut end = start;
                 let mut last_offset = ch.len_utf8();

@@ -66,4 +66,18 @@ fn main() {
             return;
         },
     };
+
+    let ast = match parser::Parser::new(&rodeo, &cli.input, &tokens, cli.no_color).parse() {
+        Ok(ast) => ast,
+        Err(error) => {
+            eprintln!("{}", error.format(&line_starts, &source.lines().collect::<Vec<_>>()));
+            eprintln!("{error_prefix}: compilation aborted due to {} previous errors", if !cli.no_color {
+                "1".red().bold().to_string()
+            } else {
+                "1".to_string()
+            });
+            return;
+        },
+    };
+    println!("{:#?}", ast);
 }
