@@ -1,4 +1,5 @@
 mod lexer;
+mod parser;
 mod operator;
 mod span;
 mod diagnostic;
@@ -65,5 +66,4 @@ fn main() {
             return;
         },
     };
-    println!("{tokens:#?}");
 }

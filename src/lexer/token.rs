@@ -19,6 +19,27 @@ pub enum TokenKind<'a> {
     Let, Var,
 }
 
+impl<'a> TokenKind<'a> {
+    pub fn format(&self, rodeo: &lasso::Rodeo) -> String {
+        match self {
+            Self::Int(i) => format!("`{i}`"),
+            Self::Float(i) => format!("`{i}`"),
+            Self::String(i) => format!("`\"{i}\"`"),
+            Self::Operator(i) => format!("`{i}`"),
+            Self::Dollar => "`$`".to_string(),
+            Self::LParen => "`(`".to_string(),
+            Self::RParen => "`)`".to_string(),
+            Self::LCurly => "`{`".to_string(),
+            Self::RCurly => "`}`".to_string(),
+            Self::Arrow => format!("`->`"),
+            Self::Semicolon => format!("`;`"),
+            Self::Identifier(i) => format!("`{}`", rodeo.resolve(i)),
+            Self::Let => "`let`".to_string(),
+            Self::Var => "`var`".to_string()
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Token<'a> {
     pub kind: TokenKind<'a>,

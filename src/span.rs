@@ -4,6 +4,12 @@ pub struct Span {
     pub end: usize,
 }
 
+impl Span {
+    pub fn splat(&self) -> Self {
+        Self { start: self.end, end: self.end + 1 }
+    }
+}
+
 impl std::ops::Add for Span {
     type Output = Self;
 
