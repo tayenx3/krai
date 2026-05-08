@@ -6,4 +6,5 @@ edition = "2021"
 [dependencies]
 clap = { version = "4.6.1", features = ["derive"] }
 lasso = "0.7.3"
+strsim = "0.11.1"
 tinycolor = "1.1.3"

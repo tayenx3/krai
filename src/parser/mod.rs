@@ -201,7 +201,7 @@ impl<'a> Parser<'a> {
             TokenKind::LCurly => self.parse_block(),
             TokenKind::Let => self.parse_let(),
             TokenKind::Var => self.parse_var(),
-            TokenKind::Dollar => self.parse_function_def(),
+            TokenKind::Dollar => self.parse_function(),
             _ => Err(Diagnostic {
                 path: self.path.to_string(),
                 msg: format!("expected expression, found `{}`", tok.kind.format(self.rodeo)),
@@ -224,7 +224,7 @@ impl<'a> Parser<'a> {
         } else {
             None
         };
-        let init = if ty.is_none() || self.expect(TokenKind::Operator(Operator::Assign)).is_ok() {
+        let init = if self.expect(TokenKind::Operator(Operator::Assign)).is_ok() {
             let expr = self.parse_expression(0)?;
             span += expr.span;
             Some(Box::new(expr))
@@ -250,7 +250,7 @@ impl<'a> Parser<'a> {
         } else {
             None
         };
-        let init = if ty.is_none() || self.expect(TokenKind::Operator(Operator::Assign)).is_ok() {
+        let init = if self.expect(TokenKind::Operator(Operator::Assign)).is_ok() {
             let expr = self.parse_expression(0)?;
             span += expr.span;
             Some(Box::new(expr))
@@ -263,7 +263,7 @@ impl<'a> Parser<'a> {
         ))
     }
 
-    fn parse_function_def(&mut self) -> Result<Expr, Diagnostic> {
+    fn parse_function(&mut self) -> Result<Expr, Diagnostic> {
         let mut span = self.expect(TokenKind::Dollar)?.span;
         let name = self.expect_ident()?.0;
         let unwrap = self.expect(TokenKind::Operator(Operator::Bang)).is_ok();
@@ -281,18 +281,27 @@ impl<'a> Parser<'a> {
             if self.expect(TokenKind::Comma).is_err() { break }
         }
         self.expect(TokenKind::RParen)?;
-        let return_ty = if self.expect(TokenKind::Arrow).is_err() {
+        let return_ty = if matches!(self.peek(), Some(Token { kind: TokenKind::Arrow, .. }) | None) {
+            None
+        } else {
             let ty = self.parse_type()?;
-            self.expect(TokenKind::Arrow)?;
+            span += ty.span;
             Some(ty)
-        } else { None };
-        let body = Box::new(self.parse_expression(0)?);
-        span += body.span;
+        };
+        if self.expect(TokenKind::Arrow).is_ok() {
+            let body = Box::new(self.parse_expression(0)?);
+            span += body.span;
 
-        Ok(self.create_node(
-            ExprKind::FunctionDef { name, params, return_ty, body, unwrap },
-            span
-        ))
+            Ok(self.create_node(
+                ExprKind::FunctionDef { name, params, return_ty, body, unwrap },
+                span
+            ))
+        } else {
+            Ok(self.create_node(
+                ExprKind::FunctionDecl { name, params, return_ty, unwrap },
+                span
+            ))
+        }
     }
 
     fn parse_type(&mut self) -> Result<ParseType, Diagnostic> {
@@ -334,7 +343,8 @@ impl<'a> Parser<'a> {
         let mut stmts = vec![];
         while let Some(tok) = self.peek() {
             if tok.kind == TokenKind::RCurly { break }
-            stmts.push(self.parse_statement()?);
+            stmts.push(self.parse_expression(0)?);
+            if self.expect(TokenKind::Semicolon).is_err() { break }
         }
         span += self.expect(TokenKind::RCurly)?.span;
         Ok(self.create_node(

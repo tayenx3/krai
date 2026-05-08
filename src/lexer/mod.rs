@@ -56,7 +56,7 @@ pub fn tokenize<'a>(path: &str, source: &'a str, no_color: bool, rodeo: &mut las
                 let mut last_offset = ch.len_utf8();
                 let mut is_float = false;
 
-                while let Some(&(start, ch)) = source_chars.peek() {
+                while let Some(&(pos, ch)) = source_chars.peek() {
                     if ch.is_ascii_digit() || ch == '_' {
                         source_chars.next();
                     } else if ch == '.' && !is_float {
@@ -66,20 +66,20 @@ pub fn tokenize<'a>(path: &str, source: &'a str, no_color: bool, rodeo: &mut las
                         break;
                     }
 
-                    end = start;
+                    end = pos;
                     last_offset = ch.len_utf8();
                 }
                 end += last_offset;
 
                 if is_float {
                     tokens.push(Token {
-                        kind: TokenKind::Float(source[start..end].parse().unwrap()),
-                        span: Span { start, end: start + ch.len_utf8() }
+                        kind: TokenKind::Float(source[start..end].replace('_', "").parse().unwrap()),
+                        span: Span { start, end }
                     });
                 } else {
                     tokens.push(Token {
-                        kind: TokenKind::Int(source[start..end].parse().unwrap()),
-                        span: Span { start, end: start + ch.len_utf8() }
+                        kind: TokenKind::Int(source[start..end].replace('_', "").parse().unwrap()),
+                        span: Span { start, end }
                     });
                 }
             },
@@ -87,21 +87,21 @@ pub fn tokenize<'a>(path: &str, source: &'a str, no_color: bool, rodeo: &mut las
                 let mut end = start;
                 let mut last_offset = ch.len_utf8();
 
-                while let Some(&(start, ch)) = source_chars.peek() {
+                while let Some(&(pos, ch)) = source_chars.peek() {
                     if ch.is_alphanumeric() {
                         source_chars.next();
                     } else {
                         break;
                     }
                     
-                    end = start;
+                    end = pos;
                     last_offset = ch.len_utf8();
                 }
                 end += last_offset;
 
                 tokens.push(Token {
                     kind: lookup_ident(&source[start..end], rodeo),
-                    span: Span { start, end: start + ch.len_utf8() }
+                    span: Span { start, end }
                 });
             },
             _ => return Err(Diagnostic {

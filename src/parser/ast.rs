@@ -47,6 +47,12 @@ pub enum ExprKind {
         body: Box<Expr>,
         unwrap: bool,
     },
+    FunctionDecl {
+        name: lasso::Spur,
+        params: Vec<Param>,
+        return_ty: Option<ParseType>,
+        unwrap: bool,
+    },
     FunctionCall {
         callee: Box<Expr>,
         args: Vec<Expr>,
