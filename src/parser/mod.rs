@@ -343,8 +343,15 @@ impl<'a> Parser<'a> {
         let mut stmts = vec![];
         while let Some(tok) = self.peek() {
             if tok.kind == TokenKind::RCurly { break }
-            stmts.push(self.parse_expression(0)?);
-            if self.expect(TokenKind::Semicolon).is_err() { break }
+            let mut stmt = self.parse_expression(0)?;
+            if let Ok(Token { span: semicolon_span, .. }) = self.expect(TokenKind::Semicolon) {
+                let semi_span = stmt.span + *semicolon_span;
+                stmt = self.create_node(ExprKind::Semi(Box::new(stmt)), semi_span);
+                stmts.push(stmt);
+            } else {
+                stmts.push(stmt);
+                break;
+            }
         }
         span += self.expect(TokenKind::RCurly)?.span;
         Ok(self.create_node(

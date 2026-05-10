@@ -50,9 +50,15 @@ impl Operator {
     pub fn prefix_output_type(&self, id: &TypeId, types: &HashMap<TypeId, Type>) -> Option<TypeId> {
         let ty = &types[id];
         match self {
+            Self::Plus => if ty.is_numeric() {
+                Some(*id)
+            } else { None },
+            Self::Minus => if ty.is_numeric() && !ty.is_unsigned() {
+                Some(*id)
+            } else { None },
             Self::Bang => if ty.is_int() {
                 Some(*id)
-            } else { None }
+            } else { None },
             _ => None
         }
     }

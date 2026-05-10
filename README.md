@@ -5,7 +5,7 @@
     <img src="https://img.shields.io/badge/built_with-Rust-orange">
 </div>
 
-Krai is a modern, general-purpose low-level programming language that aims to be:
+Krai is a modern, general-purpose low-level programming language built in Rust that aims to be:
 
 - A safer C
 - A friendlier Rust

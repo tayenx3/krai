@@ -1,4 +1,9 @@
 use std::collections::HashMap;
+use crate::span::Span;
+use crate::diagnostic::Diagnostic;
+use super::symbol::FuncId;
+use cranelift_codegen::ir::{Type as ClifType, types};
+use target_lexicon::{PointerWidth, Triple};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct TypeId(pub usize);
@@ -12,7 +17,7 @@ pub enum Type {
     Unit,
     AmbiguousInt, AmbiguousFloat,
     Unknown,
-    Function(bool, Vec<TypeId>, TypeId)
+    Function(bool, Vec<TypeId>, TypeId, FuncId)
 }
 
 impl Type {
@@ -28,9 +33,21 @@ impl Type {
     pub fn is_int(&self) -> bool {
         matches!(self,
             Self::I8 | Self::I16 | Self::I32 | Self::I64 | Self::Isz
-                | Self::U8 | Self::U16 | Self::U32 | Self::U64 | Self::Usz
-                | Self::AmbiguousInt
+            | Self::U8 | Self::U16 | Self::U32 | Self::U64 | Self::Usz
+            | Self::AmbiguousInt
         )
+    }
+
+    pub fn is_signed(&self) -> bool {
+        matches!(self, Self::I8 | Self::I16 | Self::I32 | Self::I64 | Self::Isz | Self::AmbiguousInt)
+    }
+
+    pub fn is_unsigned(&self) -> bool {
+        matches!(self, Self::U8 | Self::U16 | Self::U32 | Self::U64 | Self::Usz)
+    }
+
+    pub fn is_float(&self) -> bool {
+        matches!(self, Self::F32 | Self::F64 | Self::AmbiguousFloat)
     }
 
     pub fn is_coerceable(&self, other: &Type) -> bool {
@@ -64,7 +81,7 @@ impl Type {
             Self::AmbiguousInt => "<int>".to_string(),
             Self::AmbiguousFloat => "<float>".to_string(),
             Self::Unknown => "<unknown>".to_string(),
-            Self::Function(unwrap, params, ret) => {
+            Self::Function(unwrap, params, ret, _) => {
                 let mut params_fmt = String::new();
                 for (idx, param) in params.iter().enumerate() {
                     if idx > 0 {
@@ -75,5 +92,55 @@ impl Type {
                 format!("${}({params_fmt}) {}", if *unwrap { "!" } else { "" }, types[ret].debug(types))
             },
         }
+    }
+
+    pub fn into_clif_type(&self, target: &Triple, path: &str, span: Span, no_color: bool) -> Result<ClifType, Diagnostic> {
+        Ok(match self {
+            Self::I8 | Self::U8 | Self::Unit => types::I8,
+            Self::I16 | Self::U16 => types::I16,
+            Self::I32 | Self::U32 | Self::AmbiguousInt => types::I32,
+            Self::I64 | Self::U64 => types::I64,
+            Self::Isz | Self::Usz => match target.pointer_width().unwrap() {
+                PointerWidth::U16 => types::I16,
+                PointerWidth::U32 => types::I32,
+                PointerWidth::U64 => types::I64,
+            },
+            Self::F32 => types::F32,
+            Self::F64 | Self::AmbiguousFloat => types::F64,
+            Self::Unknown => return Err(Diagnostic {
+                path: path.to_string(),
+                msg: "cannot infer type".to_string(),
+                span, no_color
+            }),
+            Self::Function(..) => match target.pointer_width().unwrap() {
+                PointerWidth::U16 => types::I16,
+                PointerWidth::U32 => types::I32,
+                PointerWidth::U64 => types::I64,
+            },
+        })
+    }
+
+    pub fn size(&self, target: &Triple, path: &str, span: Span, no_color: bool) -> Result<u32, Diagnostic> {
+        Ok(match self {
+            Self::I8 | Self::U8 | Self::Unit => 1,
+            Self::I16 | Self::U16 => 2,
+            Self::I32 | Self::U32 | Self::AmbiguousInt | Self::F32 => 4,
+            Self::I64 | Self::U64 | Self::F64 | Self::AmbiguousFloat => 8,
+            Self::Isz | Self::Usz | Self::Function(..) => match target.pointer_width().unwrap() {
+                PointerWidth::U16 => 2,
+                PointerWidth::U32 => 4,
+                PointerWidth::U64 => 8,
+            },
+            Self::Unknown => return Err(Diagnostic {
+                path: path.to_string(),
+                msg: "cannot infer type".to_string(),
+                span, no_color
+            }),
+        })
+    }
+
+    pub fn align(&self, target: &Triple, path: &str, span: Span, no_color: bool) -> Result<u8, Diagnostic> {
+        // struct/arrays will need different alignments, we'll add them later
+        self.size(target, path, span, no_color).map(|x| x as u8)
     }
 }

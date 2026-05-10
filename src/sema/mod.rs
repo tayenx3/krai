@@ -3,22 +3,26 @@ pub mod ty;
 
 use std::collections::HashMap;
 use strsim::jaro_winkler;
-use symbol::SymbolMap;
-use ty::{Type, TypeId};
+use symbol::*;
+use ty::*;
 use crate::parser::{ast::*, ty::*};
 use crate::diagnostic::Diagnostic;
+use crate::span::Span;
 
 const CANDIDATE_SCORE_THRESHOLD: f64 = 0.70;
 
 pub struct SemChecker<'a> {
-    pub rodeo: &'a lasso::Rodeo,
+    pub rodeo: &'a mut lasso::Rodeo,
     pub path: &'a str,
     pub no_color: bool,
     pub symbols: Vec<SymbolMap>,
     pub type_map: HashMap<NodeId, TypeId>,
+    pub functions: HashMap<FuncId, FunctionData>,
+    pub function_decls: HashMap<NodeId, FuncId>,
     pub types: HashMap<TypeId, Type>,
     pub type_registry: HashMap<lasso::Spur, TypeId>,
     pub next_type_id: usize,
+    pub next_func_id: usize,
     pub unit_id: TypeId,
     pub unknown_id: TypeId,
 }
@@ -40,9 +44,12 @@ impl<'a> SemChecker<'a> {
             rodeo, path, no_color,
             symbols: vec![SymbolMap::new()],
             type_map: HashMap::new(),
+            functions: HashMap::new(),
+            function_decls: HashMap::new(),
             types: HashMap::new(),
             type_registry: HashMap::new(),
             next_type_id: 0,
+            next_func_id: 0,
             unit_id: TypeId(0),
             unknown_id: TypeId(0)
         };
@@ -142,15 +149,37 @@ impl<'a> SemChecker<'a> {
         let mut errors = vec![];
 
         for node in ast.0.iter() {
-            if let Err(err) = self.check_node(node) {
+            if let Err(err) = self.check_root_level_item(node) {
                 errors.extend(err);
             }
+        }
+
+        let main_spur = self.rodeo.get_or_intern("main");
+        if self.symbols[0].get_type(&main_spur).is_none() {
+            errors.push(Diagnostic {
+                path: self.path.to_string(),
+                msg: "expected `main` function entry point".to_string(),
+                span: Span { start: 0, end: 1 },
+                no_color: self.no_color
+            });
         }
 
         if errors.is_empty() {
             Ok(())
         } else {
             Err(errors)
+        }
+    }
+
+    pub fn check_root_level_item(&mut self, node: &Expr) -> Result<(), Vec<Diagnostic>> {
+        match &node.kind {
+            ExprKind::FunctionDecl { .. } | ExprKind::FunctionDef { .. } => self.check_node(node),
+            _ => Err(vec![Diagnostic {
+                path: self.path.to_string(),
+                msg: format!("expected root-level item"),
+                span: node.span,
+                no_color: self.no_color
+            }])
         }
     }
 
@@ -183,10 +212,12 @@ impl<'a> SemChecker<'a> {
             },
             ExprKind::Block(stmts) => {
                 let mut final_ty = None;
+                self.symbols.push(SymbolMap::new());
                 for stmt in stmts {
                     self.check_node(stmt)?;
                     final_ty = Some(self.type_map[&stmt.id]);
                 }
+                self.symbols.pop();
                 result = final_ty.unwrap_or(self.unit_id);
             },
             ExprKind::BinaryOp { lhs, rhs, op } => {
@@ -290,24 +321,43 @@ impl<'a> SemChecker<'a> {
                 };
                 if !errors.is_empty() { return Err(errors) }
 
-                let ty = Type::Function(*unwrap, param_tys.clone(), ret_ty);
-                let func_type_id = if let Some(n) = self.symbols.last().unwrap().get_type(name) {
-                    if self.types[n] == ty {
-                        *n
+                let test_fid = FuncId(self.next_func_id);
+                let ty = Type::Function(*unwrap, param_tys.clone(), ret_ty, test_fid);
+                let mut already_declared = false;
+                let (func_type_id, fid) = if let Some(n) = self.symbols.last().unwrap().get_type(name) {
+                    if let Type::Function(real_unwrap, real_param_tys, real_ret_ty, real_fid) = &self.types[n] {
+                        let mut params_equal = false;
+                        if param_tys.len() == real_param_tys.len() {
+                            for (pty, rty) in param_tys.iter().zip(real_param_tys) {
+                                params_equal |= self.types[pty] == self.types[rty];
+                            }
+                        }
+                        if (*real_unwrap == *unwrap) && params_equal && (self.types[&ret_ty] == self.types[real_ret_ty]) {
+                            already_declared = true;
+                            (*n, *real_fid)
+                        } else {
+                            return Err(vec![Diagnostic {
+                                path: self.path.to_string(),
+                                msg: format!("conflicting function declaration and definition"),
+                                span: node.span,
+                                no_color: self.no_color
+                            }]);
+                        }
                     } else {
-                        return Err(vec![Diagnostic {
-                            path: self.path.to_string(),
-                            msg: format!("conflicting function declaration and definition"),
-                            span: node.span,
-                            no_color: self.no_color
-                        }]);
+                        self.next_func_id += 1;
+                        (self.create_type(ty), test_fid)
                     }
                 } else {
-                    self.create_type(ty)
+                        self.next_func_id += 1;
+                    (self.create_type(ty), test_fid)
                 };
 
                 self.symbols.last_mut().unwrap()
                     .define_symbol(*name, false, func_type_id);
+                self.function_decls.insert(node.id, fid);
+                if !already_declared {
+                    self.functions.insert(fid, FunctionData { param_tys: param_tys.clone(), ret_ty, fty: func_type_id });
+                }
 
                 let mut smap = SymbolMap::new();
                 for (param, resolved_ty) in params.iter().zip(param_tys) {
@@ -316,6 +366,24 @@ impl<'a> SemChecker<'a> {
                 self.symbols.push(smap);
                 self.check_node(body)?;
                 self.symbols.pop();
+
+                let body_ty = &self.types[&self.type_map[&body.id]];
+                if body_ty.is_coerceable(&self.types[&ret_ty])
+                    || (*body_ty == self.types[&ret_ty] && !body_ty.is_ambiguous())
+                {
+                    self.type_map.insert(body.id, ret_ty);
+                } else {
+                    return Err(vec![Diagnostic {
+                        path: self.path.to_string(),
+                        msg: format!(
+                            "function declared with return type `{}` but returns `{}`",
+                            self.types[&ret_ty].debug(&self.types),
+                            body_ty.debug(&self.types)
+                        ),
+                        span: body.span,
+                        no_color: self.no_color
+                    }]);
+                }
 
                 result = self.unit_id;
             },
@@ -339,15 +407,19 @@ impl<'a> SemChecker<'a> {
                 };
                 if !errors.is_empty() { return Err(errors) }
 
-                let func_type_id = self.create_type(Type::Function(*unwrap, param_tys.clone(), ret_ty));
+                let fid = FuncId(self.next_func_id);
+                self.next_func_id += 1;
+                let func_type_id = self.create_type(Type::Function(*unwrap, param_tys.clone(), ret_ty, fid));
                 self.symbols.last_mut().unwrap()
                     .define_symbol(*name, false, func_type_id);
+                self.function_decls.insert(node.id, fid);
+                self.functions.insert(fid, FunctionData { param_tys, ret_ty, fty: func_type_id });
 
                 result = self.unit_id;
             },
             ExprKind::FunctionCall { callee, args } => {
                 self.check_node(callee)?;
-                if let Type::Function(_, params, ret) = self.types[&self.type_map[&callee.id]].clone() {
+                if let Type::Function(_, params, ret, _) = self.types[&self.type_map[&callee.id]].clone() {
                     let args_len = args.len();
                     let params_len = params.len();
                     if args_len != params_len {
@@ -362,7 +434,7 @@ impl<'a> SemChecker<'a> {
                         self.check_node(arg)?;
                         let arg_ty = &self.types[&self.type_map[&arg.id]];
                         let param_ty = &self.types[&param];
-                        if !arg_ty.is_coerceable(param_ty) {
+                        if !(arg_ty.is_coerceable(param_ty) || *arg_ty == *param_ty) {
                             return Err(vec![Diagnostic {
                                 path: self.path.to_string(),
                                 msg: format!(

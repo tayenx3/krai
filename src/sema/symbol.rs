@@ -2,6 +2,16 @@ use std::collections::{HashMap, HashSet};
 use super::ty::TypeId;
 
 #[derive(Debug, Clone, PartialEq)]
+pub struct FunctionData {
+    pub param_tys: Vec<TypeId>,
+    pub ret_ty: TypeId,
+    pub fty: TypeId,
+}
+
+#[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]
+pub struct FuncId(pub usize);
+
+#[derive(Debug, Clone, PartialEq)]
 pub struct SymbolMap {
     pub mutables: HashSet<lasso::Spur>,
     pub types: HashMap<lasso::Spur, TypeId>,
@@ -12,7 +22,7 @@ impl SymbolMap {
     pub fn new() -> Self {
         Self {
             mutables: HashSet::new(),
-            types: HashMap::new()
+            types: HashMap::new(),
         }
     }
 

@@ -1,6 +1,7 @@
 mod lexer;
 mod parser;
 mod sema;
+mod ir_gen;
 mod operator;
 mod span;
 mod diagnostic;
@@ -39,11 +40,6 @@ fn main() {
         Ok(src) => src,
         Err(error) => {
             eprintln!("{error_prefix}: {error}");
-            eprintln!("{error_prefix}: compilation aborted due to {} previous errors", if !cli.no_color {
-                "1".red().bold().to_string()
-            } else {
-                "1".to_string()
-            });
             return;
         }
     };
@@ -57,10 +53,11 @@ fn main() {
         }
     }
 
+    let lines = source.lines().collect::<Vec<_>>();
     let tokens = match lexer::tokenize(&cli.input, &source, cli.no_color, &mut rodeo) {
         Ok(toks) => toks,
         Err(error) => {
-            eprintln!("{}", error.format(&line_starts, &source.lines().collect::<Vec<_>>()));
+            eprintln!("{}", error.format(&line_starts, &lines));
             eprintln!("{error_prefix}: compilation aborted due to {} previous errors", if !cli.no_color {
                 "1".red().bold().to_string()
             } else {
@@ -73,7 +70,7 @@ fn main() {
     let ast = match parser::Parser::new(&rodeo, &cli.input, &tokens, cli.no_color).parse() {
         Ok(ast) => ast,
         Err(error) => {
-            eprintln!("{}", error.format(&line_starts, &source.lines().collect::<Vec<_>>()));
+            eprintln!("{}", error.format(&line_starts, &lines));
             eprintln!("{error_prefix}: compilation aborted due to {} previous errors", if !cli.no_color {
                 "1".red().bold().to_string()
             } else {
@@ -84,10 +81,9 @@ fn main() {
     };
 
     let mut sem_checker = sema::SemChecker::new(&mut rodeo, &cli.input, cli.no_color);
-    let type_map = match sem_checker.check(&ast) {
-        Ok(()) => sem_checker.type_map,
+    match sem_checker.check(&ast) {
+        Ok(()) => (),
         Err(errors) => {
-            let lines = source.lines().collect::<Vec<_>>();
             for error in &errors {
                 eprintln!("{}", error.format(&line_starts, &lines));
             }
@@ -99,11 +95,54 @@ fn main() {
             return;
         },
     };
-    let _ = type_map;
 
-    let _output_path = cli.output.as_ref()
+    let type_map = sem_checker.type_map;
+    let functions = sem_checker.functions;
+    let function_decls = sem_checker.function_decls;
+    let types = sem_checker.types;
+    let output_name = cli.output.as_ref()
+        .map(|n| PathBuf::from(n).file_stem().unwrap().display().to_string())
+        .unwrap_or(PathBuf::from(&cli.input).file_stem().unwrap().display().to_string());
+    let ir_generator = match ir_gen::IRGenerator::new(
+        &output_name,
+        &cli.input,
+        &rodeo,
+        &type_map,
+        &functions,
+        &function_decls,
+        &types,
+        cli.no_color
+    ) {
+        Ok(ig) => ig,
+        Err(err) => {
+            eprintln!("{}", err.format(&line_starts, &lines));
+            return;
+        }
+    };
+    let product = match ir_generator.generate(&ast) {
+        Ok(product) => product,
+        Err(err) => {
+            eprintln!("{}", err.format(&line_starts, &lines));
+            return;
+        }
+    };
+    let bytes = match product.emit() {
+        Ok(b) => b,
+        Err(err) => {
+            eprintln!("{error_prefix}: backend error: {err}");
+            return;
+        }
+    };
+    let output_path = cli.output.as_ref()
         .map(|n| PathBuf::from(n))
         .unwrap_or(PathBuf::from(&cli.input).with_extension("exe"));
+    match std::fs::write(output_path, &bytes) {
+        Ok(()) => (),
+        Err(error) => {
+            eprintln!("{error_prefix}: {error}");
+            return;
+        },
+    }
 
     println!("{} compilation in {:.3}s",
         if !cli.no_color {
