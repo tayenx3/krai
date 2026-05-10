@@ -309,7 +309,10 @@ impl<'a> IRGenerator<'a> {
                     Ok(unit)
                 }
             },
-            ExprKind::FunctionDef { .. } | ExprKind::FunctionDecl { .. } => todo!("scoped functions"),
+            ExprKind::FunctionDecl { .. } | ExprKind::FunctionDef { .. } => {
+                self.walk_root_level_item(node)?;
+                Ok(unit)
+            },
             ExprKind::FunctionCall { callee, args } => {
                 let fn_ptr = self.walk_node(callee, builder, unit)?;
                 let mut arg_vals = vec![];

@@ -1,0 +1,7 @@
+$outer(x (i32)) i32 -> {
+    $inner(x (i32), y (i32)) i32 -> x * y;
+
+    inner(x, 10)
+}
+
+$main() i32 -> outer(7)

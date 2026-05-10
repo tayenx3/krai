@@ -25,6 +25,7 @@ pub struct SemChecker<'a> {
     pub next_func_id: usize,
     pub unit_id: TypeId,
     pub unknown_id: TypeId,
+    pub current_function: Option<FuncId>,
 }
 
 impl<'a> SemChecker<'a> {
@@ -42,7 +43,7 @@ impl<'a> SemChecker<'a> {
 
         let mut schecker = Self {
             rodeo, path, no_color,
-            symbols: vec![SymbolMap::new()],
+            symbols: vec![SymbolMap::new(MapScope::Root)],
             type_map: HashMap::new(),
             functions: HashMap::new(),
             function_decls: HashMap::new(),
@@ -51,7 +52,8 @@ impl<'a> SemChecker<'a> {
             next_type_id: 0,
             next_func_id: 0,
             unit_id: TypeId(0),
-            unknown_id: TypeId(0)
+            unknown_id: TypeId(0),
+            current_function: None
         };
 
         schecker.unknown_id = schecker.create_type(Type::Unknown);
@@ -93,6 +95,12 @@ impl<'a> SemChecker<'a> {
         let mut candidate_score = 0.0;
 
         for map in self.symbols.iter().rev() {
+            match map.scope {
+                MapScope::Function(f) => if let Some(fid) = self.current_function {
+                    if fid != f { continue }
+                }, 
+                _ => (),
+            }
             for (n, ty) in map.iter_types() {
                 if *name == *n {
                     return Ok(ty);
@@ -212,7 +220,7 @@ impl<'a> SemChecker<'a> {
             },
             ExprKind::Block(stmts) => {
                 let mut final_ty = None;
-                self.symbols.push(SymbolMap::new());
+                self.symbols.push(SymbolMap::new(MapScope::Function(self.current_function.unwrap())));
                 for stmt in stmts {
                     self.check_node(stmt)?;
                     final_ty = Some(self.type_map[&stmt.id]);
@@ -359,7 +367,9 @@ impl<'a> SemChecker<'a> {
                     self.functions.insert(fid, FunctionData { param_tys: param_tys.clone(), ret_ty, fty: func_type_id });
                 }
 
-                let mut smap = SymbolMap::new();
+                let mut smap = SymbolMap::new(MapScope::Function(fid));
+                let old_function = self.current_function;
+                self.current_function = Some(fid);
                 for (param, resolved_ty) in params.iter().zip(param_tys) {
                     smap.define_symbol(param.name.0, param.mutability, resolved_ty);
                 }
@@ -385,6 +395,7 @@ impl<'a> SemChecker<'a> {
                     }]);
                 }
 
+                self.current_function = old_function;
                 result = self.unit_id;
             },
             ExprKind::FunctionDecl { name, params, return_ty, unwrap } => {
