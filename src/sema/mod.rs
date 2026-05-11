@@ -40,6 +40,7 @@ impl<'a> SemChecker<'a> {
         let u32_spur = rodeo.get_or_intern("u32");
         let u64_spur = rodeo.get_or_intern("u64");
         let usz_spur = rodeo.get_or_intern("usz");
+        let bool_spur = rodeo.get_or_intern("bool");
 
         let mut schecker = Self {
             rodeo, path, no_color,
@@ -68,6 +69,7 @@ impl<'a> SemChecker<'a> {
         let u64_id = schecker.create_type(Type::U64);
         let usz_id = schecker.create_type(Type::Usz);
         schecker.unit_id = schecker.create_type(Type::Unit);
+        let bool_id = schecker.create_type(Type::Bool);
 
         schecker.type_registry.insert(i8_spur, i8_id);
         schecker.type_registry.insert(i16_spur, i16_id);
@@ -79,6 +81,7 @@ impl<'a> SemChecker<'a> {
         schecker.type_registry.insert(u32_spur, u32_id);
         schecker.type_registry.insert(u64_spur, u64_id);
         schecker.type_registry.insert(usz_spur, usz_id);
+        schecker.type_registry.insert(bool_spur, bool_id);
 
         schecker
     }
@@ -182,6 +185,7 @@ impl<'a> SemChecker<'a> {
     pub fn check_root_level_item(&mut self, node: &Expr) -> Result<(), Vec<Diagnostic>> {
         match &node.kind {
             ExprKind::FunctionDecl { .. } | ExprKind::FunctionDef { .. } => self.check_node(node),
+            ExprKind::Semi(stmt) => self.check_root_level_item(stmt),
             _ => Err(vec![Diagnostic {
                 path: self.path.to_string(),
                 msg: format!("expected root-level item"),
@@ -288,7 +292,13 @@ impl<'a> SemChecker<'a> {
                     ty
                 } else { init_ty };
                 self.symbols.last_mut().unwrap()
-                    .define_symbol(*name, false, final_ty);
+                    .define_symbol(*name,
+                        false,
+                        final_ty,
+                        init.is_some()
+                            .then(|| SymbolInitState::Definitely)
+                            .unwrap_or(SymbolInitState::Not)
+                    );
                 result = final_ty;
             },
             ExprKind::Var { name, ty, init } => {
@@ -306,8 +316,57 @@ impl<'a> SemChecker<'a> {
                     ty
                 } else { init_ty };
                 self.symbols.last_mut().unwrap()
-                    .define_symbol(*name, true, final_ty);
+                    .define_symbol(*name,
+                        true,
+                        final_ty,
+                        init.is_some()
+                            .then(|| SymbolInitState::Definitely)
+                            .unwrap_or(SymbolInitState::Not)
+                    );
                 result = final_ty;
+            },
+            ExprKind::If { condition, then_body, else_body } => {
+                let mut errors = vec![];
+                if let Err(err) = self.check_node(condition) { errors.extend(err) }
+                if let Err(err) = self.check_node(then_body) { errors.extend(err) }
+                if let Some(expr) = else_body {
+                    if let Err(err) = self.check_node(expr) { errors.extend(err) }
+                }
+                if !errors.is_empty() { return Err(errors) }
+                let condition_ty = &self.types[&self.type_map[&condition.id]];
+                if *condition_ty != Type::Bool {
+                    errors.push(Diagnostic {
+                        path: self.path.to_string(),
+                        msg: format!("expected `bool` condition, found `{}`", condition_ty.debug(&self.types)),
+                        span: condition.span,
+                        no_color: self.no_color
+                    });
+                }
+                let then_ty = &self.types[&self.type_map[&then_body.id]];
+                if let Some(else_body) = else_body {
+                    let else_ty = &self.types[&self.type_map[&else_body.id]];
+                    if then_ty.is_coerceable(else_ty) {
+                        self.type_map.insert(then_body.id, self.type_map[&else_body.id]);
+                    } else if else_ty.is_coerceable(then_ty) {
+                        self.type_map.insert(else_body.id, self.type_map[&then_body.id]);
+                    } else {
+                        errors.push(Diagnostic {
+                            path: self.path.to_string(),
+                            msg: format!("expected `else` clause with type `{}`", then_ty.debug(&self.types)),
+                            span: condition.span,
+                            no_color: self.no_color
+                        });
+                    }
+                } else if *then_ty != Type::Unit {
+                    errors.push(Diagnostic {
+                        path: self.path.to_string(),
+                        msg: format!("expected `else` clause with type `{}`", then_ty.debug(&self.types)),
+                        span: condition.span,
+                        no_color: self.no_color
+                    });
+                }
+
+                result = self.type_map[&then_body.id];
             },
             ExprKind::FunctionDef { name, params, return_ty, body, unwrap } => {
                 let mut param_tys = vec![];
@@ -361,7 +420,7 @@ impl<'a> SemChecker<'a> {
                 };
 
                 self.symbols.last_mut().unwrap()
-                    .define_symbol(*name, false, func_type_id);
+                    .define_symbol(*name, false, func_type_id, SymbolInitState::Definitely);
                 self.function_decls.insert(node.id, fid);
                 if !already_declared {
                     self.functions.insert(fid, FunctionData { param_tys: param_tys.clone(), ret_ty, fty: func_type_id });
@@ -371,7 +430,7 @@ impl<'a> SemChecker<'a> {
                 let old_function = self.current_function;
                 self.current_function = Some(fid);
                 for (param, resolved_ty) in params.iter().zip(param_tys) {
-                    smap.define_symbol(param.name.0, param.mutability, resolved_ty);
+                    smap.define_symbol(param.name.0, param.mutability, resolved_ty, SymbolInitState::Definitely);
                 }
                 self.symbols.push(smap);
                 self.check_node(body)?;
@@ -422,7 +481,7 @@ impl<'a> SemChecker<'a> {
                 self.next_func_id += 1;
                 let func_type_id = self.create_type(Type::Function(*unwrap, param_tys.clone(), ret_ty, fid));
                 self.symbols.last_mut().unwrap()
-                    .define_symbol(*name, false, func_type_id);
+                    .define_symbol(*name, false, func_type_id, SymbolInitState::Definitely);
                 self.function_decls.insert(node.id, fid);
                 self.functions.insert(fid, FunctionData { param_tys, ret_ty, fty: func_type_id });
 

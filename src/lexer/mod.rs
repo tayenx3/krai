@@ -42,8 +42,18 @@ pub fn tokenize<'a>(path: &str, source: &'a str, no_color: bool, rodeo: &mut las
             '*' => tokens.push(Token { kind: TokenKind::Operator(Operator::Star), span: Span { start, end: start + ch.len_utf8() } }),
             '/' => tokens.push(Token { kind: TokenKind::Operator(Operator::Slash), span: Span { start, end: start + ch.len_utf8() } }),
             '%' => tokens.push(Token { kind: TokenKind::Operator(Operator::Modulo), span: Span { start, end: start + ch.len_utf8() } }),
-            '=' => tokens.push(Token { kind: TokenKind::Operator(Operator::Assign), span: Span { start, end: start + ch.len_utf8() } }),
-            '!' => tokens.push(Token { kind: TokenKind::Operator(Operator::Bang), span: Span { start, end: start + ch.len_utf8() } }),
+            '=' => if let Some(&(end, '=')) = source_chars.peek() {
+                tokens.push(Token { kind: TokenKind::Operator(Operator::Eq), span: Span { start, end: end + ch.len_utf8() } });
+                source_chars.next();
+            } else {
+                tokens.push(Token { kind: TokenKind::Operator(Operator::Assign), span: Span { start, end: start + ch.len_utf8() } });
+            },
+            '!' => if let Some(&(end, '=')) = source_chars.peek() {
+                tokens.push(Token { kind: TokenKind::Operator(Operator::Ne), span: Span { start, end: end + ch.len_utf8() } });
+                source_chars.next();
+            } else {
+                tokens.push(Token { kind: TokenKind::Operator(Operator::Bang), span: Span { start, end: start + ch.len_utf8() } });
+            },
             '$' => tokens.push(Token { kind: TokenKind::Dollar, span: Span { start, end: start + ch.len_utf8() } }),
             '(' => tokens.push(Token { kind: TokenKind::LParen, span: Span { start, end: start + ch.len_utf8() } }),
             ')' => tokens.push(Token { kind: TokenKind::RParen, span: Span { start, end: start + ch.len_utf8() } }),
@@ -120,6 +130,9 @@ fn lookup_ident<'a>(ident: &'a str, rodeo: &mut lasso::Rodeo) -> TokenKind<'a> {
     match ident {
         "let" => TokenKind::Let,
         "var" => TokenKind::Var,
+        "if" => TokenKind::If,
+        "else" => TokenKind::Else,
+        "then" => TokenKind::Then,
         _ => TokenKind::Identifier(rodeo.get_or_intern(ident)),
     }
 }

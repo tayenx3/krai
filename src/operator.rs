@@ -4,16 +4,17 @@ use std::collections::HashMap;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Operator {
     Plus, Minus, Star, Slash, Modulo, Assign,
-    Bang,
+    Bang, Eq, Ne
 }
 
 impl Operator {
     pub fn binding_power(&self) -> (usize, usize) {
         match self {
-            Self::Plus | Self::Minus => (20, 21),
-            Self::Star | Self::Slash | Self::Modulo => (30, 31),
+            Self::Plus | Self::Minus => (40, 41),
+            Self::Star | Self::Slash | Self::Modulo => (50, 51),
             Self::Assign => (10, 11),
             Self::Bang => (0, 0), // infix ops are handled separately
+            Self::Eq | Self::Ne => (20, 21),
         }
     }
 
@@ -31,18 +32,36 @@ impl Operator {
         match self {
             Self::Plus | Self::Minus | Self::Star
             | Self::Slash | Self::Modulo => if lhs.is_numeric() && rhs.is_numeric() {
-                if !lhs.is_ambiguous() && !rhs.is_ambiguous() && lhs == rhs {
+                if ((!lhs.is_ambiguous() && !rhs.is_ambiguous())
+                    || (lhs.is_ambiguous() && rhs.is_ambiguous()))
+                    && lhs == rhs
+                {
                     Some(*lhs_id)
                 } else if lhs.is_ambiguous() && !rhs.is_ambiguous() && lhs.is_coerceable(rhs) {
-                    types.insert(*lhs_id, rhs.clone());
+                    *types.get_mut(lhs_id).unwrap() = rhs.clone();
                     Some(*lhs_id)
                 } else if rhs.is_ambiguous() && !lhs.is_ambiguous() && rhs.is_coerceable(lhs) {
-                    types.insert(*rhs_id, lhs.clone());
+                    *types.get_mut(rhs_id).unwrap() = lhs.clone();
                     Some(*lhs_id)
                 } else if lhs.is_ambiguous() && rhs.is_ambiguous() && lhs == rhs {
                     Some(*lhs_id)
                 } else { None }
             } else { None },
+            Self::Eq | Self::Ne => {
+                let bool_id = *types.iter().find(|(_, ty)| **ty == Type::Bool).unwrap().0;
+                if ((!lhs.is_ambiguous() && !rhs.is_ambiguous())
+                    || (lhs.is_ambiguous() && rhs.is_ambiguous()))
+                    && lhs == rhs
+                {
+                    Some(bool_id)
+                } else if lhs.is_coerceable(rhs) {
+                    *types.get_mut(lhs_id).unwrap() = rhs.clone();
+                    Some(bool_id)
+                } else if rhs.is_coerceable(lhs) {
+                    *types.get_mut(rhs_id).unwrap() = lhs.clone();
+                    Some(bool_id)
+                } else { None }
+            }
             _ => None,
         }
     }
@@ -74,6 +93,8 @@ impl std::fmt::Display for Operator {
             Self::Modulo => write!(f, "%"),
             Self::Assign => write!(f, "="),
             Self::Bang => write!(f, "!"),
+            Self::Eq => write!(f, "=="),
+            Self::Ne => write!(f, "!="),
         }
     }
 }

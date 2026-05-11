@@ -201,6 +201,7 @@ impl<'a> Parser<'a> {
             TokenKind::LCurly => self.parse_block(),
             TokenKind::Let => self.parse_let(),
             TokenKind::Var => self.parse_var(),
+            TokenKind::If => self.parse_if(),
             TokenKind::Dollar => self.parse_function(),
             _ => Err(Diagnostic {
                 path: self.path.to_string(),
@@ -263,6 +264,29 @@ impl<'a> Parser<'a> {
         ))
     }
 
+    fn parse_if(&mut self) -> Result<Expr, Diagnostic> {
+        let mut span = self.expect(TokenKind::If)?.span;
+        let condition = Box::new(self.parse_expression(0)?);
+        self.expect(TokenKind::Then)?;
+        let then_body = {
+            let expr = self.parse_expression(0)?;
+            span += expr.span;
+            Box::new(expr)
+        };
+        let else_body = match self.expect(TokenKind::Else) {
+            Ok(_) => {
+                let expr = self.parse_expression(0)?;
+                span += expr.span;
+                Some(Box::new(expr))
+            },
+            Err(_) => None,
+        };
+        Ok(self.create_node(
+            ExprKind::If { condition, then_body, else_body },
+            span
+        ))
+    }
+
     fn parse_function(&mut self) -> Result<Expr, Diagnostic> {
         let mut span = self.expect(TokenKind::Dollar)?.span;
         let name = self.expect_ident()?.0;
@@ -283,11 +307,10 @@ impl<'a> Parser<'a> {
         self.expect(TokenKind::RParen)?;
         let return_ty = if matches!(self.peek(), Some(Token { kind: TokenKind::Arrow, .. }) | None) {
             None
-        } else {
-            let ty = self.parse_type()?;
+        } else if let Ok(ty) = self.parse_type() {
             span += ty.span;
             Some(ty)
-        };
+        } else { None };
         if self.expect(TokenKind::Arrow).is_ok() {
             let body = Box::new(self.parse_expression(0)?);
             span += body.span;

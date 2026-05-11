@@ -16,6 +16,7 @@ pub enum Type {
     F32, F64,
     Unit,
     AmbiguousInt, AmbiguousFloat,
+    Bool,
     Unknown,
     Function(bool, Vec<TypeId>, TypeId, FuncId)
 }
@@ -80,6 +81,7 @@ impl Type {
             Self::Unit => "()".to_string(),
             Self::AmbiguousInt => "<int>".to_string(),
             Self::AmbiguousFloat => "<float>".to_string(),
+            Self::Bool => "bool".to_string(),
             Self::Unknown => "<unknown>".to_string(),
             Self::Function(unwrap, params, ret, _) => {
                 let mut params_fmt = String::new();
@@ -96,7 +98,7 @@ impl Type {
 
     pub fn into_clif_type(&self, target: &Triple, path: &str, span: Span, no_color: bool) -> Result<ClifType, Diagnostic> {
         Ok(match self {
-            Self::I8 | Self::U8 | Self::Unit => types::I8,
+            Self::I8 | Self::U8 | Self::Unit | Self::Bool => types::I8,
             Self::I16 | Self::U16 => types::I16,
             Self::I32 | Self::U32 | Self::AmbiguousInt => types::I32,
             Self::I64 | Self::U64 => types::I64,
@@ -122,7 +124,7 @@ impl Type {
 
     pub fn size(&self, target: &Triple, path: &str, span: Span, no_color: bool) -> Result<u32, Diagnostic> {
         Ok(match self {
-            Self::I8 | Self::U8 | Self::Unit => 1,
+            Self::I8 | Self::U8 | Self::Unit | Self::Bool => 1,
             Self::I16 | Self::U16 => 2,
             Self::I32 | Self::U32 | Self::AmbiguousInt | Self::F32 => 4,
             Self::I64 | Self::U64 | Self::F64 | Self::AmbiguousFloat => 8,

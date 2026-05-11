@@ -40,6 +40,12 @@ pub enum ExprKind {
         init: Option<Box<Expr>>,
     },
 
+    If {
+        condition: Box<Expr>,
+        then_body: Box<Expr>,
+        else_body: Option<Box<Expr>>,
+    },
+
     FunctionDef {
         name: lasso::Spur,
         params: Vec<Param>,

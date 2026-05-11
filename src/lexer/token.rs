@@ -18,6 +18,7 @@ pub enum TokenKind<'a> {
 
     Identifier(lasso::Spur),
     Let, Var,
+    If, Else, Then,
 }
 
 impl<'a> TokenKind<'a> {
@@ -37,7 +38,10 @@ impl<'a> TokenKind<'a> {
             Self::Comma => ",".to_string(),
             Self::Identifier(i) => rodeo.resolve(i).to_string(),
             Self::Let => "let".to_string(),
-            Self::Var => "var".to_string()
+            Self::Var => "var".to_string(),
+            Self::If => "if".to_string(),
+            Self::Else => "else".to_string(),
+            Self::Then => "then".to_string(),
         }
     }
 }

@@ -1,1 +1,8 @@
-$main() i32 -> {}
+$count(n (i32));
+
+$main() i32 -> {
+    count(10);
+    0
+}
+
+$count(n (i32)) -> if n != 0 then count(n - 1)

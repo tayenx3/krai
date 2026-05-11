@@ -5,10 +5,11 @@ use error::*;
 use symbol::*;
 use std::collections::HashMap;
 use cranelift::prelude::*;
-use cranelift_codegen::ir::Function;
+use cranelift_codegen::ir::{BlockArg, Function};
 use cranelift_module::{Linkage, Module, FuncId as IrFuncId};
 use cranelift_object::{ObjectBuilder, ObjectModule, ObjectProduct};
 use crate::operator::Operator;
+use crate::diagnostic::Diagnostic;
 use crate::parser::ast::*;
 use crate::sema::symbol::{FuncId, FunctionData};
 use crate::sema::ty::{Type as SemType, TypeId};
@@ -87,10 +88,15 @@ impl<'a> IRGenerator<'a> {
                             .map_err(IrGenError::Diagnostic)?
                     ));
                 }
-                signature.returns.push(AbiParam::new(
-                    self.types[&data.ret_ty].into_clif_type(target, self.path, return_ty.as_ref().unwrap().span, self.no_color)
-                        .map_err(IrGenError::Diagnostic)?
-                ));
+                let data_ret_ty = &self.types[&data.ret_ty];
+                if *data_ret_ty != SemType::Unit {
+                    signature.returns.push(AbiParam::new(
+                        data_ret_ty.into_clif_type(target, self.path, return_ty.as_ref().unwrap().span, self.no_color)
+                            .map_err(IrGenError::Diagnostic)?
+                    ));
+                } else {
+                    signature.returns.push(AbiParam::new(types::I8));
+                }
 
                 let string_name = if self.symbols.len() == 1 {
                     self.rodeo.resolve(name).to_string()
@@ -118,10 +124,15 @@ impl<'a> IRGenerator<'a> {
                                 .map_err(IrGenError::Diagnostic)?
                         ));
                     }
-                    signature.returns.push(AbiParam::new(
-                        self.types[&data.ret_ty].into_clif_type(target, self.path, return_ty.as_ref().unwrap().span, self.no_color)
-                            .map_err(IrGenError::Diagnostic)?
-                    ));
+                    let data_ret_ty = &self.types[&data.ret_ty];
+                    if *data_ret_ty != SemType::Unit {
+                        signature.returns.push(AbiParam::new(
+                            data_ret_ty.into_clif_type(target, self.path, return_ty.as_ref().unwrap().span, self.no_color)
+                                .map_err(IrGenError::Diagnostic)?
+                        ));
+                    } else {
+                        signature.returns.push(AbiParam::new(types::I8));
+                    }
 
                     let string_name = if self.symbols.len() == 1 {
                         self.rodeo.resolve(name).to_string()
@@ -161,22 +172,24 @@ impl<'a> IRGenerator<'a> {
                     }
                     self.symbols.push(new_scope);
 
-                    let unit = builder.ins().iconst(types::I8, 0x0);
-                    let final_val = self.walk_node(body, &mut builder, unit)?;
+                    let mut unit = builder.ins().iconst(types::I8, 0x0);
+                    let final_val = self.walk_node(body, &mut builder, &mut unit)?;
                     builder.ins().return_(&[final_val]);
                 }
                 self.symbols.pop();
+                println!("{:?}", ctx.func);
 
                 self.module.define_function(self.ir_functions[func_id].0, &mut ctx)
                     .map_err(|err| IrGenError::BackendError(err.into(), self.no_color))?;
                 self.module.clear_context(&mut ctx);
             },
+            ExprKind::Semi(stmt) => self.walk_root_level_item(stmt)?,
             _ => unreachable!()
         }
         Ok(())
     }
 
-    fn walk_node(&mut self, node: &Expr, builder: &mut FunctionBuilder, unit: Value) -> Result<Value, IrGenError> {
+    fn walk_node(&mut self, node: &Expr, builder: &mut FunctionBuilder, unit: &mut Value) -> Result<Value, IrGenError> {
         match &node.kind {
             ExprKind::Int(i) => Ok(builder.ins().iconst(
                 self.types[&self.type_map[&node.id]]
@@ -213,10 +226,10 @@ impl<'a> IRGenerator<'a> {
             },
             ExprKind::Semi(stmt) => {
                 self.walk_node(stmt, builder, unit)?;
-                Ok(unit)
+                Ok(*unit)
             },
             ExprKind::Block(stmts) => {
-                let mut final_val = unit;
+                let mut final_val = *unit;
                 for stmt in stmts {
                     final_val = self.walk_node(stmt, builder, unit)?;
                 }
@@ -225,64 +238,98 @@ impl<'a> IRGenerator<'a> {
             ExprKind::BinaryOp { lhs, rhs, op } => {
                 let lval = self.walk_node(lhs, builder, unit)?;
                 let rval = self.walk_node(rhs, builder, unit)?;
+                let output_ty = &self.types[&self.type_map[&node.id]];
+                let diag = Diagnostic {
+                    path: self.path.to_string(),
+                    msg: "cannot infer type".to_string(),
+                    span: node.span,
+                    no_color: self.no_color
+                };
                 match op {
-                    Operator::Plus => if self.types[&self.type_map[&node.id]].is_int() {
+                    Operator::Plus => if output_ty.is_int() {
                         Ok(builder.ins().iadd(lval, rval))
-                    } else if self.types[&self.type_map[&node.id]].is_float() {
+                    } else if output_ty.is_float() {
                         Ok(builder.ins().fadd(lval, rval))
                     } else {
-                        unreachable!()
+                        return Err(IrGenError::Diagnostic(diag));
                     },
-                    Operator::Minus => if self.types[&self.type_map[&node.id]].is_int() {
+                    Operator::Minus => if output_ty.is_int() {
                         Ok(builder.ins().isub(lval, rval))
-                    } else if self.types[&self.type_map[&node.id]].is_float() {
+                    } else if output_ty.is_float() {
                         Ok(builder.ins().fsub(lval, rval))
                     } else {
-                        unreachable!()
+                        return Err(IrGenError::Diagnostic(diag));
                     },
-                    Operator::Star => if self.types[&self.type_map[&node.id]].is_int() {
+                    Operator::Star => if output_ty.is_int() {
                         Ok(builder.ins().imul(lval, rval))
-                    } else if self.types[&self.type_map[&node.id]].is_float() {
+                    } else if output_ty.is_float() {
                         Ok(builder.ins().fmul(lval, rval))
                     } else {
-                        unreachable!()
+                        return Err(IrGenError::Diagnostic(diag));
                     },
-                    Operator::Slash => if self.types[&self.type_map[&node.id]].is_signed() {
+                    Operator::Slash => if output_ty.is_signed() {
                         Ok(builder.ins().sdiv(lval, rval))
-                    } else if self.types[&self.type_map[&node.id]].is_unsigned() {
+                    } else if output_ty.is_unsigned() {
                         Ok(builder.ins().udiv(lval, rval))
-                    } else if self.types[&self.type_map[&node.id]].is_float() {
+                    } else if output_ty.is_float() {
                         Ok(builder.ins().fadd(lval, rval))
                     } else {
-                        unreachable!()
+                        return Err(IrGenError::Diagnostic(diag));
                     },
-                    Operator::Modulo => if self.types[&self.type_map[&node.id]].is_signed() {
+                    Operator::Modulo => if output_ty.is_signed() {
                         Ok(builder.ins().srem(lval, rval))
-                    } else if self.types[&self.type_map[&node.id]].is_unsigned() {
+                    } else if output_ty.is_unsigned() {
                         Ok(builder.ins().urem(lval, rval))
-                    } else if self.types[&self.type_map[&node.id]].is_float() {
+                    } else if output_ty.is_float() {
                         Ok(frem(lval, rval, builder))
                     } else {
-                        unreachable!()
+                        return Err(IrGenError::Diagnostic(diag));
+                    },
+                    Operator::Eq => if output_ty.is_int() || *output_ty == SemType::Bool {
+                        Ok(builder.ins().icmp(IntCC::Equal, lval, rval))
+                    } else if output_ty.is_float() {
+                        Ok(builder.ins().fcmp(FloatCC::Equal, lval, rval))
+                    } else if *output_ty == SemType::Unit {
+                        Ok(builder.ins().iconst(types::I8, 1))
+                    } else {
+                        return Err(IrGenError::Diagnostic(diag));
+                    },
+                    Operator::Ne => if output_ty.is_int() || *output_ty == SemType::Bool {
+                        Ok(builder.ins().icmp(IntCC::NotEqual, lval, rval))
+                    } else if output_ty.is_float() {
+                        Ok(builder.ins().fcmp(FloatCC::NotEqual, lval, rval))
+                    } else if *output_ty == SemType::Unit {
+                        Ok(builder.ins().iconst(types::I8, 1))
+                    } else {
+                        return Err(IrGenError::Diagnostic(diag));
                     },
                     _ => unreachable!(),
                 }
             },
             ExprKind::UnaryOp { operand, op } => {
                 let oval = self.walk_node(operand, builder, unit)?;
+                let output_ty = &self.types[&self.type_map[&node.id]];
+                let diag = Diagnostic {
+                    path: self.path.to_string(),
+                    msg: "cannot infer type".to_string(),
+                    span: node.span,
+                    no_color: self.no_color
+                };
                 match op {
                     Operator::Plus => Ok(oval),
-                    Operator::Minus => if self.types[&self.type_map[&node.id]].is_int() {
+                    Operator::Minus => if output_ty.is_int() {
                         Ok(builder.ins().ineg(oval))
-                    } else if self.types[&self.type_map[&node.id]].is_float() {
+                    } else if output_ty.is_float() {
                         Ok(builder.ins().fneg(oval))
                     } else {
-                        unreachable!()
+                        return Err(IrGenError::Diagnostic(diag));
                     },
-                    Operator::Bang => if self.types[&self.type_map[&node.id]].is_int() {
+                    Operator::Bang => if output_ty.is_int() {
                         Ok(builder.ins().bnot(oval))
+                    } else if output_ty.is_int() {
+                        Ok(builder.ins().bxor_imm(oval, 1))
                     } else {
-                        unreachable!()
+                        return Err(IrGenError::Diagnostic(diag));
                     },
                     _ => unreachable!(),
                 }
@@ -290,13 +337,14 @@ impl<'a> IRGenerator<'a> {
             ExprKind::Let { name, init, .. }
             | ExprKind::Var { name, init, .. } => {
                 let ty = self.type_map[&node.id];
+                let target = self.module.isa().triple();
                 let slot = builder.create_sized_stack_slot(StackSlotData {
                     kind: StackSlotKind::ExplicitSlot,
                     size: self.types[&ty]
-                        .size(self.module.isa().triple(), self.path, node.span, self.no_color)
+                        .size(target, self.path, node.span, self.no_color)
                         .map_err(IrGenError::Diagnostic)?,
                     align_shift: self.types[&ty]
-                        .align(self.module.isa().triple(), self.path, node.span, self.no_color)
+                        .align(target, self.path, node.span, self.no_color)
                         .map_err(IrGenError::Diagnostic)?,
                     key: None
                 });
@@ -306,12 +354,73 @@ impl<'a> IRGenerator<'a> {
                     builder.ins().stack_store(ival, slot, 0);
                     Ok(ival)
                 } else {
-                    Ok(unit)
+                    Ok(*unit)
                 }
+            },
+            ExprKind::If { condition, then_body, else_body } => {
+                let cval = self.walk_node(condition, builder, unit)?;
+
+                let then_block = builder.create_block();
+                let else_block = builder.create_block();
+                let merge_block = builder.create_block();
+
+                builder.append_block_param(
+                    then_block,
+                    types::I8
+                );
+                builder.append_block_param(
+                    else_block,
+                    types::I8
+                );
+                builder.append_block_param(
+                    merge_block,
+                    self.types[&self.type_map[&then_body.id]]
+                        .into_clif_type(self.module.isa().triple(), self.path, then_body.span, self.no_color)
+                        .map_err(IrGenError::Diagnostic)?
+                );
+                builder.append_block_param(
+                    merge_block,
+                    types::I8
+                );
+
+                builder.ins().brif(
+                    cval,
+                    then_block,
+                    &[BlockArg::Value(*unit)],
+                    else_block,
+                    &[BlockArg::Value(*unit)]
+                );
+
+                builder.switch_to_block(then_block);
+                let then_unit = builder.block_params(then_block)[0];
+                let then_value = self.walk_node(then_body, builder, unit)?;
+                builder.ins().jump(
+                    merge_block,
+                    &[BlockArg::Value(then_value), BlockArg::Value(then_unit)]
+                );
+
+                builder.switch_to_block(else_block);
+                let else_unit = builder.block_params(else_block)[0];
+                let else_value = match else_body {
+                    Some(expr) => self.walk_node(expr, builder, unit)?,
+                    None => else_unit,
+                };
+                builder.ins().jump(
+                    merge_block,
+                    &[BlockArg::Value(else_value), BlockArg::Value(else_unit)]
+                );
+
+                builder.seal_block(then_block);
+                builder.seal_block(else_block);
+                builder.seal_block(merge_block);
+
+                builder.switch_to_block(merge_block);
+                *unit = builder.block_params(merge_block)[1];
+                Ok(builder.block_params(merge_block)[0])
             },
             ExprKind::FunctionDecl { .. } | ExprKind::FunctionDef { .. } => {
                 self.walk_root_level_item(node)?;
-                Ok(unit)
+                Ok(*unit)
             },
             ExprKind::FunctionCall { callee, args } => {
                 let fn_ptr = self.walk_node(callee, builder, unit)?;
