@@ -42,13 +42,15 @@ impl<'a> Parser<'a> {
                 path: self.path.to_string(),
                 msg: format!("expected `{}`, found `{}`", expected.format(self.rodeo), other.kind.format(self.rodeo)),
                 span: other.span,
-                no_color: self.no_color
+                no_color: self.no_color,
+                secondaries: vec![],
             }),
             None => Err(Diagnostic {
                 path: self.path.to_string(),
                 msg: format!("expected `{}`, found end of input", expected.format(self.rodeo)),
                 span: self.tokens.last().map(|t| t.span.splat()).unwrap_or(Span { start: 0, end: 1 }),
-                no_color: self.no_color
+                no_color: self.no_color,
+                secondaries: vec![],
             }),
         }
     }
@@ -62,14 +64,16 @@ impl<'a> Parser<'a> {
                     path: self.path.to_string(),
                     msg: format!("expected identifier, found `{}`", tok.kind.format(self.rodeo)),
                     span: tok.span,
-                    no_color: self.no_color
+                    no_color: self.no_color,
+                    secondaries: vec![],
                 })
             }
             None => Err(Diagnostic {
                 path: self.path.to_string(),
                 msg: format!("expected identifier, found end of input"),
                 span: self.tokens.last().map(|t| t.span.splat()).unwrap_or(Span { start: 0, end: 1 }),
-                no_color: self.no_color
+                no_color: self.no_color,
+                secondaries: vec![],
             }),
         }
     }
@@ -150,7 +154,8 @@ impl<'a> Parser<'a> {
                 path: self.path.to_string(),
                 msg: format!("expected expression, found end of input"),
                 span: self.tokens.last().map(|t| t.span.splat()).unwrap_or(Span { start: 0, end: 1 }),
-                no_color: self.no_color
+                no_color: self.no_color,
+                secondaries: vec![],
             }),
         };
 
@@ -202,12 +207,14 @@ impl<'a> Parser<'a> {
             TokenKind::Let => self.parse_let(),
             TokenKind::Var => self.parse_var(),
             TokenKind::If => self.parse_if(),
+            TokenKind::While => self.parse_while(),
             TokenKind::Dollar => self.parse_function(),
             _ => Err(Diagnostic {
                 path: self.path.to_string(),
                 msg: format!("expected expression, found `{}`", tok.kind.format(self.rodeo)),
                 span: tok.span,
-                no_color: self.no_color
+                no_color: self.no_color,
+                secondaries: vec![],
             })
         }
     }
@@ -225,12 +232,11 @@ impl<'a> Parser<'a> {
         } else {
             None
         };
-        let init = if self.expect(TokenKind::Operator(Operator::Assign)).is_ok() {
+        self.expect(TokenKind::Operator(Operator::Assign))?;
+        let init = {
             let expr = self.parse_expression(0)?;
             span += expr.span;
-            Some(Box::new(expr))
-        } else {
-            None
+            Box::new(expr)
         };
         Ok(self.create_node(
             ExprKind::Let { name, ty, init },
@@ -251,12 +257,11 @@ impl<'a> Parser<'a> {
         } else {
             None
         };
-        let init = if self.expect(TokenKind::Operator(Operator::Assign)).is_ok() {
+        self.expect(TokenKind::Operator(Operator::Assign))?;
+        let init = {
             let expr = self.parse_expression(0)?;
             span += expr.span;
-            Some(Box::new(expr))
-        } else {
-            None
+            Box::new(expr)
         };
         Ok(self.create_node(
             ExprKind::Var { name, ty, init },
@@ -283,6 +288,30 @@ impl<'a> Parser<'a> {
         };
         Ok(self.create_node(
             ExprKind::If { condition, then_body, else_body },
+            span
+        ))
+    }
+
+    fn parse_while(&mut self) -> Result<Expr, Diagnostic> {
+        let mut span = self.expect(TokenKind::While)?.span;
+        let condition = Box::new(self.parse_expression(0)?);
+        self.expect(TokenKind::Do)?;
+        let body = {
+            let expr = self.parse_expression(0)?;
+            span += expr.span;
+            Box::new(expr)
+        };
+        let cont_expr = match self.expect(TokenKind::Then) {
+            Ok(_) => {
+                let expr = self.parse_expression(0)?;
+                span += expr.span;
+                Some(Box::new(expr))
+            },
+            Err(_) => None,
+        };
+
+        Ok(self.create_node(
+            ExprKind::While { condition, body, cont_expr },
             span
         ))
     }
@@ -334,7 +363,8 @@ impl<'a> Parser<'a> {
                 path: self.path.to_string(),
                 msg: format!("expected type, found end of input"),
                 span: self.tokens.last().map(|t| t.span.splat()).unwrap_or(Span { start: 0, end: 1 }),
-                no_color: self.no_color
+                no_color: self.no_color,
+                secondaries: vec![],
             }),
         };
 
@@ -356,7 +386,8 @@ impl<'a> Parser<'a> {
                 path: self.path.to_string(),
                 msg: format!("expected type, found `{}`", tok.kind.format(self.rodeo)),
                 span: tok.span,
-                no_color: self.no_color
+                no_color: self.no_color,
+                secondaries: vec![],
             })
         }
     }
@@ -366,15 +397,7 @@ impl<'a> Parser<'a> {
         let mut stmts = vec![];
         while let Some(tok) = self.peek() {
             if tok.kind == TokenKind::RCurly { break }
-            let mut stmt = self.parse_expression(0)?;
-            if let Ok(Token { span: semicolon_span, .. }) = self.expect(TokenKind::Semicolon) {
-                let semi_span = stmt.span + *semicolon_span;
-                stmt = self.create_node(ExprKind::Semi(Box::new(stmt)), semi_span);
-                stmts.push(stmt);
-            } else {
-                stmts.push(stmt);
-                break;
-            }
+            stmts.push(self.parse_statement()?);
         }
         span += self.expect(TokenKind::RCurly)?.span;
         Ok(self.create_node(

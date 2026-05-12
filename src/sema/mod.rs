@@ -2,9 +2,11 @@ pub mod symbol;
 pub mod ty;
 
 use std::collections::HashMap;
+use tinycolor::Colorize;
 use strsim::jaro_winkler;
 use symbol::*;
 use ty::*;
+use crate::operator::Operator;
 use crate::parser::{ast::*, ty::*};
 use crate::diagnostic::Diagnostic;
 use crate::span::Span;
@@ -142,15 +144,22 @@ impl<'a> SemChecker<'a> {
                 Err(Diagnostic {
                     path: self.path.to_string(),
                     msg: format!(
-                        "`{}` not in scope{}",
-                        self.rodeo.resolve(s),
-                        candidate.as_ref().map(|sp| format!(
-                            " (did you mean `{}`?)",
-                            self.rodeo.resolve(sp)
-                        )).unwrap_or("".to_string())
+                        "`{}` not in scope",
+                        self.rodeo.resolve(s)
                     ),
                     span: ty.span,
-                    no_color: self.no_color
+                    no_color: self.no_color,
+                    secondaries: vec![
+                        (candidate.as_ref().map(|sp| format!(
+                            "{}: did you mean `{}`?",
+                            if !self.no_color {
+                                "help".blue().bold().to_string()
+                            } else {
+                                "help".to_string()
+                            },
+                            self.rodeo.resolve(sp)
+                        )), None)
+                    ],
                 })
             }
         }
@@ -171,7 +180,8 @@ impl<'a> SemChecker<'a> {
                 path: self.path.to_string(),
                 msg: "expected `main` function entry point".to_string(),
                 span: Span { start: 0, end: 1 },
-                no_color: self.no_color
+                no_color: self.no_color,
+                secondaries: vec![],
             });
         }
 
@@ -190,7 +200,8 @@ impl<'a> SemChecker<'a> {
                 path: self.path.to_string(),
                 msg: format!("expected root-level item"),
                 span: node.span,
-                no_color: self.no_color
+                no_color: self.no_color,
+                secondaries: vec![],
             }])
         }
     }
@@ -207,15 +218,22 @@ impl<'a> SemChecker<'a> {
                     Diagnostic {
                         path: self.path.to_string(),
                         msg: format!(
-                            "`{}` not in scope{}",
+                            "`{}` not in scope",
                             self.rodeo.resolve(s),
-                            candidate.as_ref().map(|sp| format!(
-                                " (did you mean `{}`?)",
-                                self.rodeo.resolve(sp)
-                            )).unwrap_or("".to_string())
                         ),
                         span: node.span,
                         no_color: self.no_color,
+                        secondaries: vec![
+                            (candidate.as_ref().map(|sp| format!(
+                                "{}: did you mean `{}`?",
+                                if !self.no_color {
+                                    "help".blue().bold().to_string()
+                                } else {
+                                    "help".to_string()
+                                },
+                                self.rodeo.resolve(sp)
+                            )), None)
+                        ],
                     }
                 }).map_err(|err| vec![err])?,
             ExprKind::Semi(stmt) => {
@@ -233,6 +251,64 @@ impl<'a> SemChecker<'a> {
                 result = final_ty.unwrap_or(self.unit_id);
             },
             ExprKind::BinaryOp { lhs, rhs, op } => {
+                if *op == Operator::Assign {
+                    if let ExprKind::Identifier(s) = &lhs.kind {
+                        let ty = *self.get_ident_type(s)
+                            .map_err(|candidate| {
+                                Diagnostic {
+                                    path: self.path.to_string(),
+                                    msg: format!(
+                                        "`{}` not in scope",
+                                        self.rodeo.resolve(s),
+                                    ),
+                                    span: node.span,
+                                    no_color: self.no_color,
+                                    secondaries: vec![
+                                        (candidate.as_ref().map(|sp| format!(
+                                            "{}: did you mean `{}`?",
+                                            if !self.no_color {
+                                                "help".blue().bold().to_string()
+                                            } else {
+                                                "help".to_string()
+                                            },
+                                            self.rodeo.resolve(sp)
+                                        )), None)
+                                    ],
+                                }
+                            }).map_err(|err| vec![err])?;
+                        self.check_node(rhs)?;
+
+                        let rhs_id = &self.type_map[&rhs.id];
+                        if self.types[&ty].is_coerceable(&self.types[rhs_id]) {
+                            self.types.insert(ty, self.types[rhs_id].clone());
+                        } else if self.types[rhs_id].is_coerceable(&self.types[&ty]) {
+                            self.types.insert(*rhs_id, self.types[&ty].clone());
+                        } else if self.types[&ty] != self.types[rhs_id] {
+                            return Err(vec![Diagnostic {
+                                path: self.path.to_string(),
+                                msg: format!(
+                                    "`{}` has type `{}` but found `{}`",
+                                    self.rodeo.resolve(s),
+                                    self.types[&ty].debug(&self.types),
+                                    self.types[rhs_id].debug(&self.types),
+                                ),
+                                span: lhs.span,
+                                no_color: self.no_color,
+                                secondaries: vec![]
+                            }]);
+                        }
+                        self.type_map.insert(node.id, ty);
+                        return Ok(());
+                    } else {
+                        return Err(vec![Diagnostic {
+                            path: self.path.to_string(),
+                            msg: "invalid mutation target".to_string(),
+                            span: lhs.span,
+                            no_color: self.no_color,
+                            secondaries: vec![]
+                        }]);
+                    }
+                }
                 let mut errors = vec![];
                 if let Err(err) = self.check_node(lhs) {
                     errors.extend(err);
@@ -256,7 +332,8 @@ impl<'a> SemChecker<'a> {
                             self.types[rhs_id].debug(&self.types)
                         ),
                         span: node.span,
-                        no_color: self.no_color
+                        no_color: self.no_color,
+                        secondaries: vec![],
                     }]);
                 }
             },
@@ -273,7 +350,8 @@ impl<'a> SemChecker<'a> {
                             self.types[operand_id].debug(&self.types)
                         ),
                         span: node.span,
-                        no_color: self.no_color
+                        no_color: self.no_color,
+                        secondaries: vec![],
                     }]);
                 }
             },
@@ -281,23 +359,18 @@ impl<'a> SemChecker<'a> {
                 let ty = if let Some(ty) = ty {
                     *self.resolve_type(ty).map_err(|err| vec![err])?
                 } else { self.unknown_id };
-                let init_ty = if let Some(init) = init {
+                let init_ty = {
                     self.check_node(init)?;
                     self.type_map[&init.id]
-                } else { self.unknown_id };
+                };
                 let final_ty = if self.types[&init_ty].is_coerceable(&self.types[&ty]) {
-                    if let Some(init) = init {
-                        self.type_map.insert(init.id, ty);
-                    }
+                    self.type_map.insert(init.id, ty);
                     ty
                 } else { init_ty };
                 self.symbols.last_mut().unwrap()
                     .define_symbol(*name,
                         false,
                         final_ty,
-                        init.is_some()
-                            .then(|| SymbolInitState::Definitely)
-                            .unwrap_or(SymbolInitState::Not)
                     );
                 result = final_ty;
             },
@@ -305,23 +378,18 @@ impl<'a> SemChecker<'a> {
                 let ty = if let Some(ty) = ty {
                     *self.resolve_type(ty).map_err(|err| vec![err])?
                 } else { self.unknown_id };
-                let init_ty = if let Some(init) = init {
+                let init_ty = {
                     self.check_node(init)?;
                     self.type_map[&init.id]
-                } else { self.unknown_id };
+                };
                 let final_ty = if self.types[&init_ty].is_coerceable(&self.types[&ty]) {
-                    if let Some(init) = init {
-                        self.type_map.insert(init.id, ty);
-                    }
+                    self.type_map.insert(init.id, ty);
                     ty
                 } else { init_ty };
                 self.symbols.last_mut().unwrap()
                     .define_symbol(*name,
                         true,
                         final_ty,
-                        init.is_some()
-                            .then(|| SymbolInitState::Definitely)
-                            .unwrap_or(SymbolInitState::Not)
                     );
                 result = final_ty;
             },
@@ -339,7 +407,8 @@ impl<'a> SemChecker<'a> {
                         path: self.path.to_string(),
                         msg: format!("expected `bool` condition, found `{}`", condition_ty.debug(&self.types)),
                         span: condition.span,
-                        no_color: self.no_color
+                        no_color: self.no_color,
+                        secondaries: vec![],
                     });
                 }
                 let then_ty = &self.types[&self.type_map[&then_body.id]];
@@ -354,7 +423,8 @@ impl<'a> SemChecker<'a> {
                             path: self.path.to_string(),
                             msg: format!("expected `else` clause with type `{}`", then_ty.debug(&self.types)),
                             span: condition.span,
-                            no_color: self.no_color
+                            no_color: self.no_color,
+                            secondaries: vec![],
                         });
                     }
                 } else if *then_ty != Type::Unit {
@@ -362,11 +432,33 @@ impl<'a> SemChecker<'a> {
                         path: self.path.to_string(),
                         msg: format!("expected `else` clause with type `{}`", then_ty.debug(&self.types)),
                         span: condition.span,
-                        no_color: self.no_color
+                        no_color: self.no_color,
+                        secondaries: vec![],
                     });
                 }
 
                 result = self.type_map[&then_body.id];
+            },
+            ExprKind::While { condition, body, cont_expr } => {
+                let mut errors = vec![];
+                if let Err(err) = self.check_node(condition) { errors.extend(err) }
+                if let Err(err) = self.check_node(body) { errors.extend(err) }
+                if let Some(expr) = cont_expr {
+                    if let Err(err) = self.check_node(expr) { errors.extend(err) }
+                }
+                if !errors.is_empty() { return Err(errors) }
+                let condition_ty = &self.types[&self.type_map[&condition.id]];
+                if *condition_ty != Type::Bool {
+                    errors.push(Diagnostic {
+                        path: self.path.to_string(),
+                        msg: format!("expected `bool` condition, found `{}`", condition_ty.debug(&self.types)),
+                        span: condition.span,
+                        no_color: self.no_color,
+                        secondaries: vec![],
+                    });
+                }
+                
+                result = self.type_map[&body.id];
             },
             ExprKind::FunctionDef { name, params, return_ty, body, unwrap } => {
                 let mut param_tys = vec![];
@@ -407,7 +499,8 @@ impl<'a> SemChecker<'a> {
                                 path: self.path.to_string(),
                                 msg: format!("conflicting function declaration and definition"),
                                 span: node.span,
-                                no_color: self.no_color
+                                no_color: self.no_color,
+                                secondaries: vec![],
                             }]);
                         }
                     } else {
@@ -420,7 +513,7 @@ impl<'a> SemChecker<'a> {
                 };
 
                 self.symbols.last_mut().unwrap()
-                    .define_symbol(*name, false, func_type_id, SymbolInitState::Definitely);
+                    .define_symbol(*name, false, func_type_id);
                 self.function_decls.insert(node.id, fid);
                 if !already_declared {
                     self.functions.insert(fid, FunctionData { param_tys: param_tys.clone(), ret_ty, fty: func_type_id });
@@ -430,7 +523,7 @@ impl<'a> SemChecker<'a> {
                 let old_function = self.current_function;
                 self.current_function = Some(fid);
                 for (param, resolved_ty) in params.iter().zip(param_tys) {
-                    smap.define_symbol(param.name.0, param.mutability, resolved_ty, SymbolInitState::Definitely);
+                    smap.define_symbol(param.name.0, param.mutability, resolved_ty);
                 }
                 self.symbols.push(smap);
                 self.check_node(body)?;
@@ -450,7 +543,8 @@ impl<'a> SemChecker<'a> {
                             body_ty.debug(&self.types)
                         ),
                         span: body.span,
-                        no_color: self.no_color
+                        no_color: self.no_color,
+                        secondaries: vec![],
                     }]);
                 }
 
@@ -480,8 +574,7 @@ impl<'a> SemChecker<'a> {
                 let fid = FuncId(self.next_func_id);
                 self.next_func_id += 1;
                 let func_type_id = self.create_type(Type::Function(*unwrap, param_tys.clone(), ret_ty, fid));
-                self.symbols.last_mut().unwrap()
-                    .define_symbol(*name, false, func_type_id, SymbolInitState::Definitely);
+                self.symbols.last_mut().unwrap().define_symbol(*name, false, func_type_id);
                 self.function_decls.insert(node.id, fid);
                 self.functions.insert(fid, FunctionData { param_tys, ret_ty, fty: func_type_id });
 
@@ -489,7 +582,8 @@ impl<'a> SemChecker<'a> {
             },
             ExprKind::FunctionCall { callee, args } => {
                 self.check_node(callee)?;
-                if let Type::Function(_, params, ret, _) = self.types[&self.type_map[&callee.id]].clone() {
+                let func_ty = self.types[&self.type_map[&callee.id]].clone();
+                if let Type::Function(_, params, ret, _) = func_ty {
                     let args_len = args.len();
                     let params_len = params.len();
                     if args_len != params_len {
@@ -497,7 +591,8 @@ impl<'a> SemChecker<'a> {
                             path: self.path.to_string(),
                             msg: format!("expected {params_len} arguments, found {args_len} arguments"),
                             span: node.span,
-                            no_color: self.no_color
+                            no_color: self.no_color,
+                            secondaries: vec![],
                         }]);
                     }
                     for (idx, (arg, param)) in args.iter().zip(params).enumerate() {
@@ -514,7 +609,8 @@ impl<'a> SemChecker<'a> {
                                     arg_ty.debug(&self.types)
                                 ),
                                 span: arg.span,
-                                no_color: self.no_color
+                                no_color: self.no_color,
+                                secondaries: vec![],
                             }]);
                         } else if arg_ty.is_ambiguous() {
                             self.type_map.insert(arg.id, param);
@@ -524,9 +620,10 @@ impl<'a> SemChecker<'a> {
                 } else {
                     return Err(vec![Diagnostic {
                         path: self.path.to_string(),
-                        msg: format!("cannot call a non-function"),
+                        msg: format!("cannot call type `{}`", func_ty.debug(&self.types)),
                         span: callee.span,
-                        no_color: self.no_color
+                        no_color: self.no_color,
+                        secondaries: vec![],
                     }]);
                 }
             },

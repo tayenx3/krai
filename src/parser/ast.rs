@@ -32,18 +32,23 @@ pub enum ExprKind {
     Let {
         name: lasso::Spur,
         ty: Option<ParseType>,
-        init: Option<Box<Expr>>,
+        init: Box<Expr>,
     },
     Var {
         name: lasso::Spur,
         ty: Option<ParseType>,
-        init: Option<Box<Expr>>,
+        init: Box<Expr>,
     },
 
     If {
         condition: Box<Expr>,
         then_body: Box<Expr>,
         else_body: Option<Box<Expr>>,
+    },
+    While {
+        condition: Box<Expr>,
+        body: Box<Expr>,
+        cont_expr: Option<Box<Expr>>,
     },
 
     FunctionDef {

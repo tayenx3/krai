@@ -19,6 +19,7 @@ pub enum TokenKind<'a> {
     Identifier(lasso::Spur),
     Let, Var,
     If, Else, Then,
+    While, Do
 }
 
 impl<'a> TokenKind<'a> {
@@ -42,6 +43,8 @@ impl<'a> TokenKind<'a> {
             Self::If => "if".to_string(),
             Self::Else => "else".to_string(),
             Self::Then => "then".to_string(),
+            Self::While => "while".to_string(),
+            Self::Do => "do".to_string(),
         }
     }
 }

@@ -72,6 +72,7 @@ pub struct Diagnostic {
     pub msg: String,
     pub span: Span,
     pub no_color: bool,
+    pub secondaries: Vec<(Option<String>, Option<Span>)>,
 }
 
 impl Diagnostic {
@@ -101,6 +102,27 @@ impl Diagnostic {
             if !self.no_color { "─".cyan().to_string() } else { "─".to_string() },
         ));
         output.push_str(&create_snippet(start_line, start_col, end_line, end_col, lines, digit_len, self.no_color));
+
+        for (msg, span) in &self.secondaries {
+            if let Some(msg) = msg { output.push_str(msg); output.push('\n') }
+            if let Some(span) = span {
+                let start_line = line_of(span.start, line_starts);
+                let start_col = span.start - line_starts[start_line];
+                let end_line = line_of(span.end, line_starts);
+                let end_col = span.end - line_starts[end_line];
+                let digit_len = (end_line + 1).ilog10() as usize + 1;
+                output.push_str(&format!(
+                    "{:>digit_len$} {} {}:{}:{} {}\n",
+                    "",
+                    if !self.no_color { "╭─".cyan().to_string() } else { "╭─".to_string() },
+                    self.path,
+                    start_line + 1,
+                    start_col + 1,
+                    if !self.no_color { "─".cyan().to_string() } else { "─".to_string() },
+                ));
+                output.push_str(&create_snippet(start_line, start_col, end_line, end_col, lines, digit_len, self.no_color));
+            }
+        }
 
         output
     }

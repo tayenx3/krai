@@ -2,11 +2,6 @@ use std::collections::{HashMap, HashSet};
 use super::ty::TypeId;
 
 #[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]
-pub enum SymbolInitState {
-    Definitely, Not
-}
-
-#[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]
 pub enum MapScope {
     Root,
     Function(FuncId)
@@ -27,7 +22,6 @@ pub struct SymbolMap {
     pub scope: MapScope,
     pub mutables: HashSet<lasso::Spur>,
     pub types: HashMap<lasso::Spur, TypeId>,
-    pub init_states: HashMap<lasso::Spur, SymbolInitState>,
 }
 
 impl SymbolMap {
@@ -36,16 +30,14 @@ impl SymbolMap {
             scope,
             mutables: HashSet::new(),
             types: HashMap::new(),
-            init_states: HashMap::new(),
         }
     }
 
-    pub fn define_symbol(&mut self, name: lasso::Spur, mutability: bool, ty: TypeId, init_states: SymbolInitState) {
+    pub fn define_symbol(&mut self, name: lasso::Spur, mutability: bool, ty: TypeId) {
         if mutability {
             self.mutables.insert(name);
         }
         self.types.insert(name, ty);
-        self.init_states.insert(name, init_states);
     }
 
     pub fn get_type(&self, name: &lasso::Spur) -> Option<&TypeId> {

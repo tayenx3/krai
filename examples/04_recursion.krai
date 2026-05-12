@@ -5,4 +5,4 @@ $main() i32 -> {
     0
 }
 
-$count(n (i32)) -> if n != 0 then count(n - 1)
+$count(n (i32)) -> if n > 0 then count(n - 1)

@@ -4,7 +4,8 @@ use std::collections::HashMap;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Operator {
     Plus, Minus, Star, Slash, Modulo, Assign,
-    Bang, Eq, Ne
+    Bang, Eq, Ne,
+    Gt, Lt, Ge, Le,
 }
 
 impl Operator {
@@ -15,6 +16,7 @@ impl Operator {
             Self::Assign => (10, 11),
             Self::Bang => (0, 0), // infix ops are handled separately
             Self::Eq | Self::Ne => (20, 21),
+            Self::Gt | Self::Lt | Self::Ge | Self::Le => (30, 31),
         }
     }
 
@@ -61,7 +63,24 @@ impl Operator {
                     *types.get_mut(rhs_id).unwrap() = lhs.clone();
                     Some(bool_id)
                 } else { None }
-            }
+            },
+            Self::Gt | Self::Lt | Self::Ge | Self::Le => if lhs.is_numeric() && rhs.is_numeric() {
+                let bool_id = *types.iter().find(|(_, ty)| **ty == Type::Bool).unwrap().0;
+                if ((!lhs.is_ambiguous() && !rhs.is_ambiguous())
+                    || (lhs.is_ambiguous() && rhs.is_ambiguous()))
+                    && lhs == rhs
+                {
+                    Some(bool_id)
+                } else if lhs.is_ambiguous() && !rhs.is_ambiguous() && lhs.is_coerceable(rhs) {
+                    *types.get_mut(lhs_id).unwrap() = rhs.clone();
+                    Some(bool_id)
+                } else if rhs.is_ambiguous() && !lhs.is_ambiguous() && rhs.is_coerceable(lhs) {
+                    *types.get_mut(rhs_id).unwrap() = lhs.clone();
+                    Some(bool_id)
+                } else if lhs.is_ambiguous() && rhs.is_ambiguous() && lhs == rhs {
+                    Some(bool_id)
+                } else { None }
+            } else { None },
             _ => None,
         }
     }
@@ -95,6 +114,10 @@ impl std::fmt::Display for Operator {
             Self::Bang => write!(f, "!"),
             Self::Eq => write!(f, "=="),
             Self::Ne => write!(f, "!="),
+            Self::Gt => write!(f, ">"),
+            Self::Lt => write!(f, "<"),
+            Self::Ge => write!(f, ">="),
+            Self::Le => write!(f, "<=")
         }
     }
 }

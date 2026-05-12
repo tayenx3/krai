@@ -165,15 +165,41 @@ impl<'a> IRGenerator<'a> {
                     builder.switch_to_block(entry);
                     builder.seal_block(entry);
                     
-                    let block_params = builder.block_params(entry);
                     let mut new_scope = HashMap::new();
                     for (idx, (param, &ty)) in params.iter().zip(&self.functions[func_id].param_tys).enumerate() {
-                        new_scope.insert(param.name.0,
-                            Symbol {
-                                kind: SymbolKind::Arg(block_params[idx]),
-                                ty
-                            }
-                        );
+                        if param.mutability {
+                            let param_ty = &self.types[&ty];
+                            let target = self.module.isa().triple();
+                            let ss = builder.create_sized_stack_slot(StackSlotData {
+                                kind: StackSlotKind::ExplicitSlot,
+                                size: param_ty.size(target, self.path, param.name.1, self.no_color)
+                                    .map_err(IrGenError::Diagnostic)?,
+                                align_shift: param_ty.align(target, self.path, param.name.1, self.no_color)
+                                    .map_err(IrGenError::Diagnostic)?,
+                                key: None
+                            });
+                            let val = builder.block_params(entry)[idx];
+                            builder.ins().stack_store(
+                                val,
+                                ss,
+                                0
+                            );
+                            new_scope.insert(
+                                param.name.0,
+                                Symbol {
+                                    kind: SymbolKind::SS(ss),
+                                    ty
+                                }
+                            );
+                        } else {
+                            new_scope.insert(
+                                param.name.0,
+                                Symbol {
+                                    kind: SymbolKind::Arg(builder.block_params(entry)[idx]),
+                                    ty
+                                }
+                            );
+                        }
                     }
                     self.symbols.push(new_scope);
 
@@ -240,70 +266,120 @@ impl<'a> IRGenerator<'a> {
                 Ok(final_val)
             },
             ExprKind::BinaryOp { lhs, rhs, op } => {
+                if *op == Operator::Assign {
+                    if let ExprKind::Identifier(s) = &lhs.kind {
+                        let rval = self.walk_node(rhs, builder, unit)?;
+                        match self.find_ident(s).unwrap().kind {
+                            SymbolKind::SS(n) => {
+                                builder.ins().stack_store(rval, n, 0);
+                            },
+                            SymbolKind::Func(_) => todo!(),
+                            SymbolKind::Arg(_) => unreachable!(),
+                        }
+                        return Ok(rval);
+                    } else { unreachable!() }
+                }
                 let lval = self.walk_node(lhs, builder, unit)?;
                 let rval = self.walk_node(rhs, builder, unit)?;
-                let output_ty = &self.types[&self.type_map[&node.id]];
+                let lhs_ty = &self.types[&self.type_map[&lhs.id]];
                 let diag = Diagnostic {
                     path: self.path.to_string(),
                     msg: "cannot infer type".to_string(),
                     span: node.span,
-                    no_color: self.no_color
+                    no_color: self.no_color,
+                    secondaries: vec![],
                 };
                 match op {
-                    Operator::Plus => if output_ty.is_int() {
+                    Operator::Plus => if lhs_ty.is_int() {
                         Ok(builder.ins().iadd(lval, rval))
-                    } else if output_ty.is_float() {
+                    } else if lhs_ty.is_float() {
                         Ok(builder.ins().fadd(lval, rval))
                     } else {
                         return Err(IrGenError::Diagnostic(diag));
                     },
-                    Operator::Minus => if output_ty.is_int() {
+                    Operator::Minus => if lhs_ty.is_int() {
                         Ok(builder.ins().isub(lval, rval))
-                    } else if output_ty.is_float() {
+                    } else if lhs_ty.is_float() {
                         Ok(builder.ins().fsub(lval, rval))
                     } else {
                         return Err(IrGenError::Diagnostic(diag));
                     },
-                    Operator::Star => if output_ty.is_int() {
+                    Operator::Star => if lhs_ty.is_int() {
                         Ok(builder.ins().imul(lval, rval))
-                    } else if output_ty.is_float() {
+                    } else if lhs_ty.is_float() {
                         Ok(builder.ins().fmul(lval, rval))
                     } else {
                         return Err(IrGenError::Diagnostic(diag));
                     },
-                    Operator::Slash => if output_ty.is_signed() {
+                    Operator::Slash => if lhs_ty.is_signed() {
                         Ok(builder.ins().sdiv(lval, rval))
-                    } else if output_ty.is_unsigned() {
+                    } else if lhs_ty.is_unsigned() {
                         Ok(builder.ins().udiv(lval, rval))
-                    } else if output_ty.is_float() {
+                    } else if lhs_ty.is_float() {
                         Ok(builder.ins().fadd(lval, rval))
                     } else {
                         return Err(IrGenError::Diagnostic(diag));
                     },
-                    Operator::Modulo => if output_ty.is_signed() {
+                    Operator::Modulo => if lhs_ty.is_signed() {
                         Ok(builder.ins().srem(lval, rval))
-                    } else if output_ty.is_unsigned() {
+                    } else if lhs_ty.is_unsigned() {
                         Ok(builder.ins().urem(lval, rval))
-                    } else if output_ty.is_float() {
+                    } else if lhs_ty.is_float() {
                         Ok(frem(lval, rval, builder))
                     } else {
                         return Err(IrGenError::Diagnostic(diag));
                     },
-                    Operator::Eq => if output_ty.is_int() || *output_ty == SemType::Bool {
+                    Operator::Eq => if lhs_ty.is_int() || *lhs_ty == SemType::Bool {
                         Ok(builder.ins().icmp(IntCC::Equal, lval, rval))
-                    } else if output_ty.is_float() {
+                    } else if lhs_ty.is_float() {
                         Ok(builder.ins().fcmp(FloatCC::Equal, lval, rval))
-                    } else if *output_ty == SemType::Unit {
+                    } else if *lhs_ty == SemType::Unit {
                         Ok(builder.ins().iconst(types::I8, 1))
                     } else {
                         return Err(IrGenError::Diagnostic(diag));
                     },
-                    Operator::Ne => if output_ty.is_int() || *output_ty == SemType::Bool {
+                    Operator::Ne => if lhs_ty.is_int() || *lhs_ty == SemType::Bool {
                         Ok(builder.ins().icmp(IntCC::NotEqual, lval, rval))
-                    } else if output_ty.is_float() {
+                    } else if lhs_ty.is_float() {
                         Ok(builder.ins().fcmp(FloatCC::NotEqual, lval, rval))
-                    } else if *output_ty == SemType::Unit {
+                    } else if *lhs_ty == SemType::Unit {
                         Ok(builder.ins().iconst(types::I8, 1))
+                    } else {
+                        return Err(IrGenError::Diagnostic(diag));
+                    },
+                    Operator::Gt => if lhs_ty.is_signed() {
+                        Ok(builder.ins().icmp(IntCC::SignedGreaterThan, lval, rval))
+                    } else if lhs_ty.is_unsigned() {
+                        Ok(builder.ins().icmp(IntCC::UnsignedGreaterThan, lval, rval))
+                    } else if lhs_ty.is_float() {
+                        Ok(builder.ins().fcmp(FloatCC::GreaterThan, lval, rval))
+                    } else {
+                        return Err(IrGenError::Diagnostic(diag));
+                    },
+                    Operator::Lt => if lhs_ty.is_signed() {
+                        Ok(builder.ins().icmp(IntCC::SignedLessThan, lval, rval))
+                    } else if lhs_ty.is_unsigned() {
+                        Ok(builder.ins().icmp(IntCC::UnsignedLessThan, lval, rval))
+                    } else if lhs_ty.is_float() {
+                        Ok(builder.ins().fcmp(FloatCC::LessThan, lval, rval))
+                    } else {
+                        return Err(IrGenError::Diagnostic(diag));
+                    },
+                    Operator::Ge => if lhs_ty.is_signed() {
+                        Ok(builder.ins().icmp(IntCC::SignedGreaterThanOrEqual, lval, rval))
+                    } else if lhs_ty.is_unsigned() {
+                        Ok(builder.ins().icmp(IntCC::UnsignedGreaterThanOrEqual, lval, rval))
+                    } else if lhs_ty.is_float() {
+                        Ok(builder.ins().fcmp(FloatCC::GreaterThanOrEqual, lval, rval))
+                    } else {
+                        return Err(IrGenError::Diagnostic(diag));
+                    },
+                    Operator::Le => if lhs_ty.is_signed() {
+                        Ok(builder.ins().icmp(IntCC::SignedLessThanOrEqual, lval, rval))
+                    } else if lhs_ty.is_unsigned() {
+                        Ok(builder.ins().icmp(IntCC::UnsignedLessThanOrEqual, lval, rval))
+                    } else if lhs_ty.is_float() {
+                        Ok(builder.ins().fcmp(FloatCC::LessThanOrEqual, lval, rval))
                     } else {
                         return Err(IrGenError::Diagnostic(diag));
                     },
@@ -312,25 +388,26 @@ impl<'a> IRGenerator<'a> {
             },
             ExprKind::UnaryOp { operand, op } => {
                 let oval = self.walk_node(operand, builder, unit)?;
-                let output_ty = &self.types[&self.type_map[&node.id]];
+                let operand_ty = &self.types[&self.type_map[&operand.id]];
                 let diag = Diagnostic {
                     path: self.path.to_string(),
                     msg: "cannot infer type".to_string(),
                     span: node.span,
-                    no_color: self.no_color
+                    no_color: self.no_color,
+                    secondaries: vec![],
                 };
                 match op {
                     Operator::Plus => Ok(oval),
-                    Operator::Minus => if output_ty.is_int() {
+                    Operator::Minus => if operand_ty.is_int() {
                         Ok(builder.ins().ineg(oval))
-                    } else if output_ty.is_float() {
+                    } else if operand_ty.is_float() {
                         Ok(builder.ins().fneg(oval))
                     } else {
                         return Err(IrGenError::Diagnostic(diag));
                     },
-                    Operator::Bang => if output_ty.is_int() {
+                    Operator::Bang => if operand_ty.is_int() {
                         Ok(builder.ins().bnot(oval))
-                    } else if output_ty.is_int() {
+                    } else if *operand_ty == SemType::Bool {
                         Ok(builder.ins().bxor_imm(oval, 1))
                     } else {
                         return Err(IrGenError::Diagnostic(diag));
@@ -353,13 +430,9 @@ impl<'a> IRGenerator<'a> {
                     key: None
                 });
                 self.symbols.last_mut().unwrap().insert(*name, Symbol { kind: SymbolKind::SS(slot), ty });
-                if let Some(init) = init {
-                    let ival = self.walk_node(init, builder, unit)?;
-                    builder.ins().stack_store(ival, slot, 0);
-                    Ok(ival)
-                } else {
-                    Ok(*unit)
-                }
+                let ival = self.walk_node(init, builder, unit)?;
+                builder.ins().stack_store(ival, slot, 0);
+                Ok(ival)
             },
             ExprKind::If { condition, then_body, else_body } => {
                 let cval = self.walk_node(condition, builder, unit)?;
@@ -396,17 +469,17 @@ impl<'a> IRGenerator<'a> {
                 );
 
                 builder.switch_to_block(then_block);
-                let then_unit = builder.block_params(then_block)[0];
-                let then_value = self.walk_node(then_body, builder, unit)?;
+                let mut then_unit = builder.block_params(then_block)[0];
+                let then_value = self.walk_node(then_body, builder, &mut then_unit)?;
                 builder.ins().jump(
                     merge_block,
                     &[BlockArg::Value(then_value), BlockArg::Value(then_unit)]
                 );
 
                 builder.switch_to_block(else_block);
-                let else_unit = builder.block_params(else_block)[0];
+                let mut else_unit = builder.block_params(else_block)[0];
                 let else_value = match else_body {
-                    Some(expr) => self.walk_node(expr, builder, unit)?,
+                    Some(expr) => self.walk_node(expr, builder, &mut else_unit)?,
                     None => else_unit,
                 };
                 builder.ins().jump(
@@ -421,6 +494,59 @@ impl<'a> IRGenerator<'a> {
                 builder.switch_to_block(merge_block);
                 *unit = builder.block_params(merge_block)[1];
                 Ok(builder.block_params(merge_block)[0])
+            },
+            ExprKind::While { condition, body, cont_expr } => {
+                let cond_eval_block = builder.create_block();
+                let body_block = builder.create_block();
+                let break_block = builder.create_block();
+                
+                builder.append_block_param(
+                    cond_eval_block,
+                    types::I8
+                );
+                builder.append_block_param(
+                    body_block,
+                    types::I8
+                );
+                builder.append_block_param(
+                    break_block,
+                    types::I8
+                );
+
+                builder.ins().jump(
+                    cond_eval_block,
+                    &[BlockArg::Value(*unit)],
+                );
+
+                builder.switch_to_block(cond_eval_block);
+                let cval = self.walk_node(condition, builder, unit)?;
+                let cond_unit = builder.block_params(cond_eval_block)[0];
+                builder.ins().brif(cval,
+                    body_block,
+                    &[BlockArg::Value(cond_unit)],
+                    break_block,
+                    &[BlockArg::Value(cond_unit)]
+                );
+
+                builder.switch_to_block(body_block);
+                let mut body_unit = builder.block_params(body_block)[0];
+                self.walk_node(body, builder, &mut body_unit)?;
+                if let Some(expr) = cont_expr {
+                    self.walk_node(expr, builder, &mut body_unit)?;
+                }
+                builder.ins().jump(
+                    cond_eval_block,
+                    &[BlockArg::Value(*unit)]
+                );
+                
+                builder.seal_block(cond_eval_block);
+                builder.seal_block(body_block);
+                builder.seal_block(break_block);
+
+                builder.switch_to_block(break_block);
+                *unit = builder.block_params(break_block)[0];
+
+                Ok(*unit)
             },
             ExprKind::FunctionDecl { .. } | ExprKind::FunctionDef { .. } => {
                 self.walk_root_level_item(node)?;

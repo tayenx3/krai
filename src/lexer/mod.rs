@@ -27,7 +27,8 @@ pub fn tokenize<'a>(path: &str, source: &'a str, no_color: bool, rodeo: &mut las
                         path: path.to_string(),
                         msg: format!("unclosed string literal"),
                         span: Span { start, end },
-                        no_color
+                        no_color,
+                        secondaries: vec![],
                     });
                 }
                 tokens.push(Token { kind: TokenKind::String(&source[(start + 1)..(end - 1)]), span: Span { start, end: start + ch.len_utf8() } });
@@ -53,6 +54,18 @@ pub fn tokenize<'a>(path: &str, source: &'a str, no_color: bool, rodeo: &mut las
                 source_chars.next();
             } else {
                 tokens.push(Token { kind: TokenKind::Operator(Operator::Bang), span: Span { start, end: start + ch.len_utf8() } });
+            },
+            '>' => if let Some(&(end, '=')) = source_chars.peek() {
+                tokens.push(Token { kind: TokenKind::Operator(Operator::Ge), span: Span { start, end: end + ch.len_utf8() } });
+                source_chars.next();
+            } else {
+                tokens.push(Token { kind: TokenKind::Operator(Operator::Gt), span: Span { start, end: start + ch.len_utf8() } });
+            },
+            '<' => if let Some(&(end, '=')) = source_chars.peek() {
+                tokens.push(Token { kind: TokenKind::Operator(Operator::Le), span: Span { start, end: end + ch.len_utf8() } });
+                source_chars.next();
+            } else {
+                tokens.push(Token { kind: TokenKind::Operator(Operator::Lt), span: Span { start, end: start + ch.len_utf8() } });
             },
             '$' => tokens.push(Token { kind: TokenKind::Dollar, span: Span { start, end: start + ch.len_utf8() } }),
             '(' => tokens.push(Token { kind: TokenKind::LParen, span: Span { start, end: start + ch.len_utf8() } }),
@@ -101,7 +114,7 @@ pub fn tokenize<'a>(path: &str, source: &'a str, no_color: bool, rodeo: &mut las
                 let mut last_offset = ch.len_utf8();
 
                 while let Some(&(pos, ch)) = source_chars.peek() {
-                    if ch.is_alphanumeric() {
+                    if ch.is_alphanumeric() || ch == '_' {
                         source_chars.next();
                     } else {
                         break;
@@ -121,7 +134,8 @@ pub fn tokenize<'a>(path: &str, source: &'a str, no_color: bool, rodeo: &mut las
                 path: path.to_string(),
                 msg: format!("unrecognized char `{ch}`"),
                 span: Span { start, end: start + ch.len_utf8() },
-                no_color
+                no_color,
+                secondaries: vec![],
             })
         }
     }
@@ -136,6 +150,8 @@ fn lookup_ident<'a>(ident: &'a str, rodeo: &mut lasso::Rodeo) -> TokenKind<'a> {
         "if" => TokenKind::If,
         "else" => TokenKind::Else,
         "then" => TokenKind::Then,
+        "while" => TokenKind::While,
+        "do" => TokenKind::Do,
         _ => TokenKind::Identifier(rodeo.get_or_intern(ident)),
     }
 }

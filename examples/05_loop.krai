@@ -1,0 +1,15 @@
+$loop(x (i32)) i32 ->
+    if x < 10 then loop(x + 1)
+    else x
+
+$main() i32 -> {
+    var normal_result = 0;
+    while normal_result < 10 do
+        normal_result = normal_result + 1;
+
+    let recursive_result = loop(0);
+
+    if normal_result == recursive_result
+        then 0
+        else 1
+}

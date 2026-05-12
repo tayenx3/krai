@@ -112,7 +112,8 @@ impl Type {
             Self::Unknown => return Err(Diagnostic {
                 path: path.to_string(),
                 msg: "cannot infer type".to_string(),
-                span, no_color
+                span, no_color,
+                secondaries: vec![]
             }),
             Self::Function(..) => match target.pointer_width().unwrap() {
                 PointerWidth::U16 => types::I16,
@@ -136,7 +137,8 @@ impl Type {
             Self::Unknown => return Err(Diagnostic {
                 path: path.to_string(),
                 msg: "cannot infer type".to_string(),
-                span, no_color
+                span, no_color,
+                secondaries: vec![]
             }),
         })
     }
