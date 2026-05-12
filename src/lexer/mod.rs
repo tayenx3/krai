@@ -61,6 +61,9 @@ pub fn tokenize<'a>(path: &str, source: &'a str, no_color: bool, rodeo: &mut las
             '}' => tokens.push(Token { kind: TokenKind::RCurly, span: Span { start, end: start + ch.len_utf8() } }),
             ';' => tokens.push(Token { kind: TokenKind::Semicolon, span: Span { start, end: start + ch.len_utf8() } }),
             ',' => tokens.push(Token { kind: TokenKind::Comma, span: Span { start, end: start + ch.len_utf8() } }),
+            '#' => while let Some((_, ch)) = source_chars.next() {
+                if ch == '\n' { break }
+            },
             ch if ch.is_ascii_digit() => {
                 let mut end = start;
                 let mut last_offset = ch.len_utf8();

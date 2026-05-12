@@ -5,6 +5,7 @@ mod ir_gen;
 mod operator;
 mod span;
 mod diagnostic;
+mod obj_file_ext;
 
 use clap::Parser;
 use tinycolor::Colorize;
@@ -119,6 +120,7 @@ fn main() {
             return;
         }
     };
+    let object_ext = obj_file_ext::object_file_extension(ir_generator.target());
     let product = match ir_generator.generate(&ast) {
         Ok(product) => product,
         Err(err) => {
@@ -135,7 +137,7 @@ fn main() {
     };
     let output_path = cli.output.as_ref()
         .map(|n| PathBuf::from(n))
-        .unwrap_or(PathBuf::from(&cli.input).with_extension("exe"));
+        .unwrap_or(PathBuf::from(&cli.input).with_extension(object_ext));
     match std::fs::write(output_path, &bytes) {
         Ok(()) => (),
         Err(error) => {

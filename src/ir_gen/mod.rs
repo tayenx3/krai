@@ -3,6 +3,7 @@ pub mod symbol;
 
 use error::*;
 use symbol::*;
+use target_lexicon::Triple;
 use std::collections::HashMap;
 use cranelift::prelude::*;
 use cranelift_codegen::ir::{BlockArg, Function};
@@ -55,6 +56,10 @@ impl<'a> IRGenerator<'a> {
             ir_functions: HashMap::new(),
             no_color
         })
+    }
+
+    pub fn target(&self) -> &Triple {
+        self.module.isa().triple()
     }
 
     fn find_ident(&self, name: &lasso::Spur) -> Option<&Symbol> {
@@ -177,7 +182,6 @@ impl<'a> IRGenerator<'a> {
                     builder.ins().return_(&[final_val]);
                 }
                 self.symbols.pop();
-                println!("{:?}", ctx.func);
 
                 self.module.define_function(self.ir_functions[func_id].0, &mut ctx)
                     .map_err(|err| IrGenError::BackendError(err.into(), self.no_color))?;
