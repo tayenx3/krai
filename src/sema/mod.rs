@@ -396,9 +396,13 @@ impl<'a> SemChecker<'a> {
             ExprKind::If { condition, then_body, else_body } => {
                 let mut errors = vec![];
                 if let Err(err) = self.check_node(condition) { errors.extend(err) }
+                self.symbols.push(SymbolMap::new(MapScope::Function(self.current_function.unwrap())));
                 if let Err(err) = self.check_node(then_body) { errors.extend(err) }
+                self.symbols.pop();
                 if let Some(expr) = else_body {
+                    self.symbols.push(SymbolMap::new(MapScope::Function(self.current_function.unwrap())));
                     if let Err(err) = self.check_node(expr) { errors.extend(err) }
+                    self.symbols.pop();
                 }
                 if !errors.is_empty() { return Err(errors) }
                 let condition_ty = &self.types[&self.type_map[&condition.id]];
@@ -442,9 +446,13 @@ impl<'a> SemChecker<'a> {
             ExprKind::While { condition, body, cont_expr } => {
                 let mut errors = vec![];
                 if let Err(err) = self.check_node(condition) { errors.extend(err) }
+                self.symbols.push(SymbolMap::new(MapScope::Function(self.current_function.unwrap())));
                 if let Err(err) = self.check_node(body) { errors.extend(err) }
+                self.symbols.pop();
                 if let Some(expr) = cont_expr {
+                    self.symbols.push(SymbolMap::new(MapScope::Function(self.current_function.unwrap())));
                     if let Err(err) = self.check_node(expr) { errors.extend(err) }
+                    self.symbols.pop();
                 }
                 if !errors.is_empty() { return Err(errors) }
                 let condition_ty = &self.types[&self.type_map[&condition.id]];

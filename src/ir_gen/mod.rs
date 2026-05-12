@@ -470,7 +470,9 @@ impl<'a> IRGenerator<'a> {
 
                 builder.switch_to_block(then_block);
                 let mut then_unit = builder.block_params(then_block)[0];
+                self.symbols.push(HashMap::new());
                 let then_value = self.walk_node(then_body, builder, &mut then_unit)?;
+                self.symbols.pop();
                 builder.ins().jump(
                     merge_block,
                     &[BlockArg::Value(then_value), BlockArg::Value(then_unit)]
@@ -479,7 +481,12 @@ impl<'a> IRGenerator<'a> {
                 builder.switch_to_block(else_block);
                 let mut else_unit = builder.block_params(else_block)[0];
                 let else_value = match else_body {
-                    Some(expr) => self.walk_node(expr, builder, &mut else_unit)?,
+                    Some(expr) => {
+                        self.symbols.push(HashMap::new());
+                        let val = self.walk_node(expr, builder, &mut else_unit)?;
+                        self.symbols.pop();
+                        val
+                    },
                     None => else_unit,
                 };
                 builder.ins().jump(
@@ -530,9 +537,13 @@ impl<'a> IRGenerator<'a> {
 
                 builder.switch_to_block(body_block);
                 let mut body_unit = builder.block_params(body_block)[0];
+                self.symbols.push(HashMap::new());
                 self.walk_node(body, builder, &mut body_unit)?;
+                self.symbols.pop();
                 if let Some(expr) = cont_expr {
+                    self.symbols.push(HashMap::new());
                     self.walk_node(expr, builder, &mut body_unit)?;
+                    self.symbols.pop();
                 }
                 builder.ins().jump(
                     cond_eval_block,
